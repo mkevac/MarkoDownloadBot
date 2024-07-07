@@ -11,6 +11,8 @@ services:
       - 8081:8081
   markodownloadbot:
     image: mkevac/markodownloadbot:latest
+    depends_on:
+      - telegram-bot-api
     environment:
       TELEGRAM_BOT_API_TOKEN: "${TELEGRAM_BOT_API_TOKEN}"
     volumes:
