@@ -10,7 +10,7 @@ services:
     ports:
       - 8081:8081
   markodownloadbot:
-    image: markodownloadbot:latest
+    image: mkevac/markodownloadbot:latest
     environment:
       TELEGRAM_BOT_API_TOKEN: "${TELEGRAM_BOT_API_TOKEN}"
     volumes:

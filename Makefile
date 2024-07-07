@@ -1,6 +1,7 @@
 all:
 	GOOS=linux GOARCH=amd64 go build
-	docker build -t markodownloadbot .
+	docker build -t mkevac/markodownloadbot .
+	docker push mkevac/markodownloadbot
 
 run:
 	docker-compose up -d
