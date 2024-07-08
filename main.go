@@ -57,8 +57,8 @@ func downloadVideo(url string) (string, error) {
 
 	commandString = append(commandString, "yt-dlp")
 
-	// commandString = append(commandString, "-f")
-	// commandString = append(commandString, "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4")
+	commandString = append(commandString, "--recode-video")
+	commandString = append(commandString, "mp4")
 
 	commandString = append(commandString, "-o")
 	commandString = append(commandString, tmpDir+"/"+randomName+".%(ext)s")
