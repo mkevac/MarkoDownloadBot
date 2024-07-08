@@ -53,8 +53,21 @@ func downloadVideo(url string) (string, error) {
 	id := uuid.New()
 	randomName := id.String()
 
-	cmd := exec.Command("yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-		"-o", tmpDir+"/"+randomName+".%(ext)s", "--print-to-file", randomName+".%(ext)s", tmpDir+"/"+randomName+".txt", url)
+	var commandString []string
+
+	commandString = append(commandString, "yt-dlp")
+
+	// commandString = append(commandString, "-f")
+	// commandString = append(commandString, "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4")
+
+	commandString = append(commandString, "-o")
+	commandString = append(commandString, tmpDir+"/"+randomName+".%(ext)s")
+	commandString = append(commandString, "--print-to-file")
+	commandString = append(commandString, randomName+".%(ext)s")
+	commandString = append(commandString, tmpDir+"/"+randomName+".txt")
+	commandString = append(commandString, url)
+
+	cmd := exec.Command(commandString[0], commandString[1:]...)
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
