@@ -62,9 +62,6 @@ func downloadVideo(url string) (string, error) {
 
 	commandString = append(commandString, "-o")
 	commandString = append(commandString, tmpDir+"/"+randomName+".%(ext)s")
-	commandString = append(commandString, "--print-to-file")
-	commandString = append(commandString, randomName+".%(ext)s")
-	commandString = append(commandString, tmpDir+"/"+randomName+".txt")
 	commandString = append(commandString, url)
 
 	cmd := exec.Command(commandString[0], commandString[1:]...)
@@ -82,21 +79,7 @@ func downloadVideo(url string) (string, error) {
 	log.Printf("Output: %s\n", out.String())
 	log.Printf("Error: %s\n", stderr.String())
 
-	// open text file with video filename and get contents
-	textFile := tmpDir + "/" + randomName + ".txt"
-
-	buf, err := os.ReadFile(textFile)
-	if err != nil {
-		return "", fmt.Errorf("error reading text file '%s': %s", textFile, err)
-	}
-
-	filename := strings.TrimSpace(string(buf))
-
-	if err := os.Remove(textFile); err != nil {
-		log.Printf("Error removing text file: %s", err)
-	}
-
-	return filename, nil
+	return randomName + ".mp4", nil
 }
 
 func cleanupAndVerifyInput(input string) (string, error) {
