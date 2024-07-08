@@ -163,9 +163,4 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if err != nil {
 		log.Printf("Error removing video file: %s", err)
 	}
-
-	err = os.Remove(tmpDir + "/" + strings.TrimSuffix(path, ".mp4") + ".txt")
-	if err != nil {
-		log.Printf("Error removing text file: %s", err)
-	}
 }
