@@ -60,6 +60,11 @@ func downloadVideo(url string) (string, error) {
 	commandString = append(commandString, "--recode-video")
 	commandString = append(commandString, "mp4")
 
+	commandString = append(commandString, "-f")
+	commandString = append(commandString, "bv[filesize<=1700M]+ba[filesize<=300M]")
+	commandString = append(commandString, "-S")
+	commandString = append(commandString, "res:720")
+
 	commandString = append(commandString, "-o")
 	commandString = append(commandString, tmpDir+"/"+randomName+".%(ext)s")
 	commandString = append(commandString, url)
