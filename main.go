@@ -1,20 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"github.com/google/uuid"
 )
 
 const (
@@ -47,46 +44,6 @@ func main() {
 	b.Start(ctx)
 }
 
-// download video from url using yt-dlp and save it in a temporary directory
-// return the path to the downloaded video
-func downloadVideo(url string) (string, error) {
-	id := uuid.New()
-	randomName := id.String()
-
-	var commandString []string
-
-	commandString = append(commandString, "yt-dlp")
-
-	commandString = append(commandString, "--recode-video")
-	commandString = append(commandString, "mp4")
-
-	commandString = append(commandString, "-f")
-	commandString = append(commandString, "bv[filesize<=1700M]+ba[filesize<=300M]")
-	commandString = append(commandString, "-S")
-	commandString = append(commandString, "ext,res:720")
-
-	commandString = append(commandString, "-o")
-	commandString = append(commandString, tmpDir+"/"+randomName+".%(ext)s")
-	commandString = append(commandString, url)
-
-	cmd := exec.Command(commandString[0], commandString[1:]...)
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		return "", fmt.Errorf("command execution failed with %s", err)
-	}
-
-	log.Printf("Output: %s\n", out.String())
-	log.Printf("Error: %s\n", stderr.String())
-
-	return randomName + ".mp4", nil
-}
-
 func cleanupAndVerifyInput(input string) (string, error) {
 	byLines := strings.Split(input, "\n")
 	if len(byLines) > 1 {
@@ -109,7 +66,7 @@ func cleanupAndVerifyInput(input string) (string, error) {
 }
 
 func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	log.Printf("[%s]: received message: \"%s\"", update.Message.From.Username, update.Message.Text)
+	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
 	input, err := cleanupAndVerifyInput(update.Message.Text)
 	if err != nil {
@@ -120,14 +77,14 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	log.Printf("[%s]: video url: %s", update.Message.From.Username, input)
+	log.Printf("[%s]: video url: '%s'", update.Message.From.Username, input)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   "I will download the video and send it to you shortly.",
 	})
 
-	path, err := downloadVideo(input)
+	video, err := DownloadVideo(input, update.Message.From.Username, tmpDir)
 	if err != nil {
 		log.Printf("Error downloading video: %s", err)
 
@@ -139,16 +96,19 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	fullUrl := fmt.Sprintf("file://%s/%s", tmpDir, path)
-
 	b.SendVideo(ctx, &bot.SendVideoParams{
-		ChatID: update.Message.Chat.ID,
-		Video:  &models.InputFileString{Data: fullUrl},
+		ChatID:   update.Message.Chat.ID,
+		Video:    &models.InputFileString{Data: "file://" + video.Path},
+		Width:    video.Width,
+		Height:   video.Height,
+		Duration: (int)(video.Duration),
 	})
 
-	// remove downloaded video and text file
-	err = os.Remove(tmpDir + "/" + path)
-	if err != nil {
+	log.Printf("[%s]: video sent", update.Message.From.Username)
+
+	if err := video.Delete(); err != nil {
 		log.Printf("Error removing video file: %s", err)
 	}
+
+	log.Printf("[%s]: video removed", update.Message.From.Username)
 }
