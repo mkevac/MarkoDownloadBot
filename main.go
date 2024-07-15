@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -36,9 +37,17 @@ func main() {
 		bot.WithServerURL("http://telegram-bot-api:8081"),
 	}
 
-	b, err := bot.New(os.Getenv("TELEGRAM_BOT_API_TOKEN"), opts...)
-	if err != nil {
-		panic(err)
+	var b *bot.Bot
+	var err error
+
+	for {
+		b, err = bot.New(os.Getenv("TELEGRAM_BOT_API_TOKEN"), opts...)
+		if err != nil {
+			log.Printf("Error creating bot: %s", err)
+			time.Sleep(time.Second * 5)
+		} else {
+			break
+		}
 	}
 
 	b.Start(ctx)
