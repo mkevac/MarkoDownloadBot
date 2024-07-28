@@ -1,6 +1,6 @@
 # Marko Download Bot
 
-This is a Telegram bot that received URL to a video for popular sites like Instagram, TikTok, YouTubem, etc. and responds with a downloaded video. It is convenient for sharing content with your friends and family.
+This is a Telegram bot that receives URL to a video for popular sites like Instagram, TikTok, YouTube, etc. and responds with a downloaded video. It is convenient for sharing content with your friends and family.
 
 ![GIF](MarkoDownloadBot.gif)
 
