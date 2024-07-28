@@ -13,15 +13,23 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/mkevac/markodownloadbot/stats"
 )
 
 const (
 	tmpDir = "/var/lib/telegram-bot-api"
 )
 
+var (
+	adminUsername string
+)
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	adminUsername = os.Getenv("ADMIN_USERNAME")
+	log.Printf("Admin username: %s", adminUsername)
 
 	// Use http.FileServer to serve files from the specified directory
 	fileServer := http.FileServer(http.Dir(tmpDir))
@@ -50,6 +58,8 @@ func main() {
 		}
 	}
 
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/stats", bot.MatchTypeExact, statsHandler)
+
 	b.Start(ctx)
 }
 
@@ -74,6 +84,36 @@ func cleanupAndVerifyInput(input string) (string, error) {
 	return input, nil
 }
 
+func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message.From.Username != adminUsername {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "You are not authorized to use this command",
+		})
+		return
+	}
+
+	stats := stats.GetStats()
+
+	// prepare stats message in Markdown format
+	var statsMessage strings.Builder
+	statsMessage.WriteString("*Stats*\n")
+	statsMessage.WriteString("```\n")
+	statsMessage.WriteString(fmt.Sprintf("Total requests: %d\n", len(stats.Requests)))
+	for username, count := range stats.Requests {
+		statsMessage.WriteString(fmt.Sprintf("%s: %d\n", username, count))
+	}
+	statsMessage.WriteString(fmt.Sprintf("Download errors: %d\n", stats.DownloadErrors))
+	statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: %d\n", stats.UnrecognizedCommands))
+	statsMessage.WriteString("```")
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      statsMessage.String(),
+		ParseMode: models.ParseModeMarkdown,
+	})
+}
+
 func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
@@ -83,9 +123,11 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 			ChatID: update.Message.Chat.ID,
 			Text:   "Please send me a video link",
 		})
+		stats.AddUnrecognizedCommand()
 		return
 	}
 
+	stats.AddRequest(update.Message.From.Username)
 	log.Printf("[%s]: video url: '%s'", update.Message.From.Username, input)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -96,6 +138,7 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	video, err := DownloadVideo(input, update.Message.From.Username, tmpDir)
 	if err != nil {
 		log.Printf("Error downloading video: %s", err)
+		stats.AddDownloadError()
 
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,

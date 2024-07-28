@@ -15,6 +15,7 @@ services:
       - telegram-bot-api
     environment:
       TELEGRAM_BOT_API_TOKEN: "${TELEGRAM_BOT_API_TOKEN}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME}"
     volumes:
       - data:/var/lib/telegram-bot-api
 
