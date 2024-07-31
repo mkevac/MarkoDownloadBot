@@ -10,7 +10,7 @@ COPY . .
 # Build the binary for different platforms
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /app/markodownloadbot .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /app/markodownloadbot .
 
 # Stage 2: Create the final image
 FROM alpine:latest
