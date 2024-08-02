@@ -95,11 +95,16 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 	stats := stats.GetStats()
 
+	totalRequests := 0
+	for _, count := range stats.Requests {
+		totalRequests += count
+	}
+
 	// prepare stats message in Markdown format
 	var statsMessage strings.Builder
 	statsMessage.WriteString("*Stats*\n")
 	statsMessage.WriteString("```\n")
-	statsMessage.WriteString(fmt.Sprintf("Total requests: %d\n", len(stats.Requests)))
+	statsMessage.WriteString(fmt.Sprintf("Total requests: %d\n", totalRequests))
 	for username, count := range stats.Requests {
 		statsMessage.WriteString(fmt.Sprintf("%s: %d\n", username, count))
 	}
