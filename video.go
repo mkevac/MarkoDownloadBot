@@ -19,6 +19,7 @@ type Video struct {
 	Width    int            `json:"width"`
 	Height   int            `json:"height"`
 	Duration CustomDuration `json:"duration_string"`
+	VCodec   string         `json:"vcodec"`
 	Path     string
 	FileName string
 
@@ -116,7 +117,7 @@ func DownloadVideo(videoUrl string, user string, tmpDir string) (*Video, error) 
 		return nil, fmt.Errorf("error populating info: %s", err)
 	}
 
-	if strings.Contains(res.parsedUrl.Host, "instagram") {
+	if strings.HasPrefix(res.VCodec, "av01") {
 		if err := res.convert(); err != nil {
 			return nil, fmt.Errorf("error converting video: %s", err)
 		}
