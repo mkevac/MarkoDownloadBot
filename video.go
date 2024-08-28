@@ -117,7 +117,10 @@ func DownloadVideo(videoUrl string, user string, tmpDir string) (*Video, error) 
 		return nil, fmt.Errorf("error populating info: %s", err)
 	}
 
-	if strings.HasPrefix(res.VCodec, "av01") {
+	log.Printf("[%s]: video format '%s'", res.user, res.VCodec)
+
+	if strings.HasPrefix(res.VCodec, "av01") || strings.HasPrefix(res.VCodec, "vp09") {
+		log.Printf("[%s]: video codec is not supported by iOS, converting video", res.user)
 		if err := res.convert(); err != nil {
 			return nil, fmt.Errorf("error converting video: %s", err)
 		}

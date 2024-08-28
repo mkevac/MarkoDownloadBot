@@ -1,5 +1,5 @@
 # Stage 1: Build the Go binary
-FROM golang:latest as builder
+FROM golang:latest AS builder
 
 # Set the working directory
 WORKDIR /app
