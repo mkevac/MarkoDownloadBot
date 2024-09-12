@@ -22,6 +22,7 @@ const (
 
 var (
 	adminUsername string
+	adminChatID   int64
 )
 
 func main() {
@@ -63,6 +64,23 @@ func main() {
 	b.Start(ctx)
 }
 
+func saveAdminChatID(username string, chatID int64) {
+	if adminUsername != "" && adminUsername == username {
+		adminChatID = chatID
+	}
+}
+
+func sendMessageToAdmin(ctx context.Context, b *bot.Bot, text string) {
+	if adminChatID == 0 {
+		return
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: adminChatID,
+		Text:   text,
+	})
+}
+
 func cleanupAndVerifyInput(input string) (string, error) {
 	byLines := strings.Split(input, "\n")
 	if len(byLines) > 1 {
@@ -85,11 +103,14 @@ func cleanupAndVerifyInput(input string) (string, error) {
 }
 
 func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
+
 	if update.Message.From.Username != adminUsername {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
 		})
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unauthorized access to /stats command from @%s", update.Message.From.Username))
 		return
 	}
 
@@ -122,12 +143,15 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
+	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
+
 	input, err := cleanupAndVerifyInput(update.Message.Text)
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Please send me a video link",
 		})
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unrecognized command from @%s: %s", update.Message.From.Username, update.Message.Text))
 		stats.AddUnrecognizedCommand()
 		return
 	}
@@ -145,10 +169,15 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		log.Printf("Error downloading video: %s", err)
 		stats.AddDownloadError()
 
+		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading video from %s: %s",
+			update.Message.From.Username, input, err.Error())
+
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("Error downloading video from %s: %s", input, err.Error()),
+			Text:   errorMsg,
 		})
+
+		sendMessageToAdmin(ctx, b, errorMsg)
 
 		return
 	}
