@@ -223,6 +223,11 @@ func (video *Video) getCommandString() []string {
 		res = append(res, "ext,res:720")
 	}
 
+	if strings.Contains(video.parsedUrl.Host, "tiktok.com") {
+		res = append(res, "-f")
+		res = append(res, "b[url!^=\"https://www.tiktok.com/\"]")
+	}
+
 	res = append(res, "-o")
 	res = append(res, tmpDir+"/"+video.randomName+".%(ext)s")
 	res = append(res, video.url)
