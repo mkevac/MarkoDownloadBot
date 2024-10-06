@@ -23,8 +23,17 @@ COOKIES_FILE=/path/to/your/cookies.txt
 
 ## Usage
 
-There is only one command: `/stats`. It gives you some basic statistics.
-Otherwise just send a URL to a bot and it will give you a video.
+The bot supports the following commands:
+
+1. **Video Download**: Simply send a URL to the bot, and it will download and send the video to you.
+
+2. `/audio [URL]`: Use this command followed by an audio URL to download and receive audio files.
+
+3. `/stats`: (Admin only) Provides basic usage statistics of the bot.
+
+4. `/help` or `/start`: Displays a help message with information about how to use the bot.
+
+To download media, just send a valid video or audio link to the bot, and it will handle the rest!
 
 ## Custom Cookies File
 
