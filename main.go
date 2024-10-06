@@ -161,10 +161,18 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 }
 
 func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil {
+		log.Println("Received update with nil Message")
+		return
+	}
 	handleDownload(ctx, b, update, update.Message.Text, false)
 }
 
 func audioHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil {
+		log.Println("Received audio command with nil Message")
+		return
+	}
 	input := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/audio"))
 	handleDownload(ctx, b, update, input, true)
 }
