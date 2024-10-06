@@ -15,11 +15,12 @@ import (
 	"github.com/google/uuid"
 )
 
-type Video struct {
+type Media struct {
 	Width    int            `json:"width"`
 	Height   int            `json:"height"`
 	Duration CustomDuration `json:"duration_string"`
 	VCodec   string         `json:"vcodec"`
+	ACodec   string         `json:"acodec"`
 	Path     string
 	FileName string
 
@@ -29,6 +30,7 @@ type Video struct {
 	parsedUrl   *url.URL
 	user        string
 	cookiesFile string
+	audioOnly   bool
 }
 
 type CustomDuration int
@@ -82,16 +84,17 @@ func (d *CustomDuration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func DownloadVideo(videoUrl string, user string, tmpDir string, cookiesFile string) (*Video, error) {
-	res := &Video{
+func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile string, audioOnly bool) (*Media, error) {
+	res := &Media{
 		tmpDir:      tmpDir,
-		url:         videoUrl,
+		url:         mediaUrl,
 		randomName:  uuid.New().String(),
 		user:        user,
 		cookiesFile: cookiesFile,
+		audioOnly:   audioOnly,
 	}
 
-	u, err := url.Parse(videoUrl)
+	u, err := url.Parse(mediaUrl)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("invalid URL")
 	}
@@ -113,44 +116,52 @@ func DownloadVideo(videoUrl string, user string, tmpDir string, cookiesFile stri
 		return nil, fmt.Errorf("command execution failed with %s", err)
 	}
 
-	res.Path = filepath.Join(tmpDir, res.randomName+".mp4")
+	if audioOnly {
+		res.Path = filepath.Join(tmpDir, res.randomName+".mp3")
+	} else {
+		res.Path = filepath.Join(tmpDir, res.randomName+".mp4")
+	}
 
 	if err := res.populateInfo(); err != nil {
 		return nil, fmt.Errorf("error populating info: %s", err)
 	}
 
-	log.Printf("[%s]: video format '%s'", res.user, res.VCodec)
+	if audioOnly {
+		log.Printf("[%s]: audio format '%s'", res.user, res.ACodec)
+	} else {
+		log.Printf("[%s]: video format '%s'", res.user, res.VCodec)
 
-	if strings.HasPrefix(res.VCodec, "av01") || strings.HasPrefix(res.VCodec, "vp09") {
-		log.Printf("[%s]: video codec is not supported by iOS, converting video", res.user)
-		if err := res.convert(); err != nil {
-			return nil, fmt.Errorf("error converting video: %s", err)
+		if strings.HasPrefix(res.VCodec, "av01") || strings.HasPrefix(res.VCodec, "vp09") {
+			log.Printf("[%s]: video codec is not supported by iOS, converting video", res.user)
+			if err := res.convert(); err != nil {
+				return nil, fmt.Errorf("error converting video: %s", err)
+			}
 		}
 	}
 
 	return res, nil
 }
 
-func (video *Video) Delete() error {
-	if err := os.Remove(video.Path); err != nil {
+func (media *Media) Delete() error {
+	if err := os.Remove(media.Path); err != nil {
 		return fmt.Errorf("error deleting file: %s", err)
 	}
 
 	return nil
 }
 
-func (video *Video) convert() error {
+func (media *Media) convert() error {
 	// we need to use ffmpeg to do some conversions
 	// this is the command to do that:
 	// ffmpeg -i downloaded_video.mp4 -c:v libx264 -c:a aac -strict -2 -movflags +faststart -vf "scale=1080:-2" -b:v 5000k output_video.mp4
 
-	outputPath := filepath.Join(video.tmpDir, video.randomName+"_converted.mp4")
+	outputPath := filepath.Join(media.tmpDir, media.randomName+"_converted.mp4")
 
 	var cmdSlice []string
 
 	cmdSlice = append(cmdSlice, "ffmpeg")
 	cmdSlice = append(cmdSlice, "-i")
-	cmdSlice = append(cmdSlice, video.Path)
+	cmdSlice = append(cmdSlice, media.Path)
 	cmdSlice = append(cmdSlice, "-c:v")
 	cmdSlice = append(cmdSlice, "libx264")
 	cmdSlice = append(cmdSlice, "-c:a")
@@ -165,7 +176,7 @@ func (video *Video) convert() error {
 	cmdSlice = append(cmdSlice, "5000k")
 	cmdSlice = append(cmdSlice, outputPath)
 
-	log.Printf("[%s]: executing command: '%s'", video.user, strings.Join(cmdSlice, " "))
+	log.Printf("[%s]: executing command: '%s'", media.user, strings.Join(cmdSlice, " "))
 
 	cmd := exec.Command(cmdSlice[0], cmdSlice[1:]...)
 	var out bytes.Buffer
@@ -179,25 +190,25 @@ func (video *Video) convert() error {
 		return err
 	}
 
-	video.Path = outputPath
-	video.FileName = video.randomName + "_converted.mp4"
+	media.Path = outputPath
+	media.FileName = media.randomName + "_converted.mp4"
 
-	if err := os.Remove(filepath.Join(video.tmpDir, video.randomName+".mp4")); err != nil {
+	if err := os.Remove(filepath.Join(media.tmpDir, media.randomName+".mp4")); err != nil {
 		log.Printf("error deleting original file: %s", err)
 	}
 
 	return nil
 }
 
-func (video *Video) populateInfo() error {
-	jsonPath := filepath.Join(video.tmpDir, video.randomName+".info.json")
+func (media *Media) populateInfo() error {
+	jsonPath := filepath.Join(media.tmpDir, media.randomName+".info.json")
 
 	buf, err := os.ReadFile(jsonPath)
 	if err != nil {
 		return fmt.Errorf("error reading json file '%s': %s", jsonPath, err)
 	}
 
-	if err := json.Unmarshal(buf, video); err != nil {
+	if err := json.Unmarshal(buf, media); err != nil {
 		return fmt.Errorf("error parsing json content: %s", err)
 	}
 
@@ -208,35 +219,43 @@ func (video *Video) populateInfo() error {
 	return nil
 }
 
-func (video *Video) getCommandString() []string {
+func (media *Media) getCommandString() []string {
 	var res []string
 
 	res = append(res, "yt-dlp")
 
-	res = append(res, "--recode-video")
-	res = append(res, "mp4")
+	if media.audioOnly {
+		res = append(res, "-x")
+		res = append(res, "--audio-format")
+		res = append(res, "mp3")
+	} else {
+		res = append(res, "--recode-video")
+		res = append(res, "mp4")
+	}
 
 	res = append(res, "--write-info-json")
 
-	if video.parsedUrl.Host == "www.youtube.com" || video.parsedUrl.Host == "youtube.com" || video.parsedUrl.Host == "youtu.be" {
-		res = append(res, "-f")
-		res = append(res, "bv[filesize<=1700M]+ba[filesize<=300M]")
-		res = append(res, "-S")
-		res = append(res, "ext,res:720")
+	if media.parsedUrl.Host == "www.youtube.com" || media.parsedUrl.Host == "youtube.com" || media.parsedUrl.Host == "youtu.be" {
+		if !media.audioOnly {
+			res = append(res, "-f")
+			res = append(res, "bv[filesize<=1700M]+ba[filesize<=300M]")
+			res = append(res, "-S")
+			res = append(res, "ext,res:720")
+		}
 	}
 
-	if strings.Contains(video.parsedUrl.Host, "tiktok.com") {
+	if strings.Contains(media.parsedUrl.Host, "tiktok.com") {
 		res = append(res, "-f")
 		res = append(res, "b[url!^=\"https://www.tiktok.com/\"]")
 	}
 
 	res = append(res, "-o")
-	res = append(res, tmpDir+"/"+video.randomName+".%(ext)s")
-	res = append(res, video.url)
+	res = append(res, media.tmpDir+"/"+media.randomName+".%(ext)s")
+	res = append(res, media.url)
 
-	if video.cookiesFile != "" {
+	if media.cookiesFile != "" {
 		res = append(res, "--cookies")
-		res = append(res, video.cookiesFile)
+		res = append(res, media.cookiesFile)
 	}
 
 	return res

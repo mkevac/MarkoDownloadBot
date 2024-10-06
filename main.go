@@ -8,10 +8,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
-
-	"path/filepath"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -62,6 +61,9 @@ func main() {
 	}
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/stats", bot.MatchTypeExact, statsHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/audio", bot.MatchTypePrefix, audioHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, helpHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, helpHandler)
 
 	b.Start(ctx)
 }
@@ -143,15 +145,24 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 }
 
 func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	handleDownload(ctx, b, update, update.Message.Text, false)
+}
+
+func audioHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	input := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/audio"))
+	handleDownload(ctx, b, update, input, true)
+}
+
+func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, input string, audioOnly bool) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
 	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
 
-	input, err := cleanupAndVerifyInput(update.Message.Text)
+	input, err := cleanupAndVerifyInput(input)
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   "Please send me a video link",
+			Text:   "Please send me a valid video or audio link",
 		})
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unrecognized command from @%s: %s", update.Message.From.Username, update.Message.Text))
 		stats.AddUnrecognizedCommand()
@@ -159,28 +170,34 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 
 	stats.AddRequest(update.Message.From.Username)
-	log.Printf("[%s]: video url: '%s'", update.Message.From.Username, input)
+
+	var mediaType string
+	if audioOnly {
+		mediaType = "audio"
+	} else {
+		mediaType = "video"
+	}
+	log.Printf("[%s]: %s url: '%s'", update.Message.From.Username, mediaType, input)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
-		Text:   "I will download the video and send it to you shortly.",
+		Text:   fmt.Sprintf("I will download the %s and send it to you shortly.", mediaType),
 	})
 
 	cookiesFile := filepath.Join(tmpDir, "cookies.txt")
 	if _, err := os.Stat(cookiesFile); os.IsNotExist(err) {
-		// Create an empty cookies file if it doesn't exist
 		if _, err := os.Create(cookiesFile); err != nil {
 			log.Printf("Error creating empty cookies file: %s", err)
 		}
 	}
 
-	video, err := DownloadVideo(input, update.Message.From.Username, tmpDir, cookiesFile)
+	media, err := DownloadMedia(input, update.Message.From.Username, tmpDir, cookiesFile, audioOnly)
 	if err != nil {
-		log.Printf("Error downloading video: %s", err)
+		log.Printf("Error downloading %s: %s", mediaType, err)
 		stats.AddDownloadError()
 
-		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading video from %s: %s",
-			update.Message.From.Username, input, err.Error())
+		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading %s from %s: %s",
+			update.Message.From.Username, mediaType, input, err.Error())
 
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -192,19 +209,56 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	b.SendVideo(ctx, &bot.SendVideoParams{
-		ChatID:   update.Message.Chat.ID,
-		Video:    &models.InputFileString{Data: "file://" + video.Path},
-		Width:    video.Width,
-		Height:   video.Height,
-		Duration: (int)(video.Duration),
-	})
-
-	log.Printf("[%s]: video sent", update.Message.From.Username)
-
-	if err := video.Delete(); err != nil {
-		log.Printf("Error removing video file: %s", err)
+	if audioOnly {
+		b.SendAudio(ctx, &bot.SendAudioParams{
+			ChatID: update.Message.Chat.ID,
+			Audio:  &models.InputFileString{Data: "file://" + media.Path},
+		})
+	} else {
+		b.SendVideo(ctx, &bot.SendVideoParams{
+			ChatID:   update.Message.Chat.ID,
+			Video:    &models.InputFileString{Data: "file://" + media.Path},
+			Width:    media.Width,
+			Height:   media.Height,
+			Duration: (int)(media.Duration),
+		})
 	}
 
-	log.Printf("[%s]: video removed", update.Message.From.Username)
+	log.Printf("[%s]: %s sent", update.Message.From.Username, mediaType)
+
+	if err := media.Delete(); err != nil {
+		log.Printf("Error removing %s file: %s", mediaType, err)
+	}
+
+	log.Printf("[%s]: %s removed", update.Message.From.Username, mediaType)
+}
+
+func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
+
+	helpMessage := `<b>Welcome to the Marko Download Bot!</b>
+
+Here's how you can use me:
+
+1. <b>Download Video:</b> 
+   Simply send a video URL, and I'll download and send the video to you.
+
+2. <code>/audio [URL]</code>: 
+   Use this command followed by an audio URL to download and receive audio files.
+
+3. <code>/stats</code>: 
+   (Admin only) View usage statistics of the bot.
+
+4. <code>/help</code> or <code>/start</code>: 
+   Display this help message.
+
+To download media, just send me a valid video or audio link. I'll take care of the rest!
+
+Note: Please ensure you have the rights to download and use the media you request.`
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      helpMessage,
+		ParseMode: models.ParseModeHTML,
+	})
 }
