@@ -65,6 +65,22 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, helpHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, helpHandler)
 
+	success, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+		Commands: []models.BotCommand{
+			{Command: "start", Description: "Start the bot"},
+			{Command: "help", Description: "Show help information"},
+			{Command: "audio", Description: "Download audio"},
+			{Command: "stats", Description: "Show stats (admin only)"},
+		},
+	})
+	if err != nil {
+		log.Printf("Error setting bot commands: %v", err)
+	} else if !success {
+		log.Println("SetMyCommands did not return true")
+	} else {
+		log.Println("Bot commands set successfully")
+	}
+
 	b.Start(ctx)
 }
 
