@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"path/filepath"
+
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/mkevac/markodownloadbot/stats"
@@ -164,7 +166,15 @@ func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		Text:   "I will download the video and send it to you shortly.",
 	})
 
-	video, err := DownloadVideo(input, update.Message.From.Username, tmpDir)
+	cookiesFile := filepath.Join(tmpDir, "cookies.txt")
+	if _, err := os.Stat(cookiesFile); os.IsNotExist(err) {
+		// Create an empty cookies file if it doesn't exist
+		if _, err := os.Create(cookiesFile); err != nil {
+			log.Printf("Error creating empty cookies file: %s", err)
+		}
+	}
+
+	video, err := DownloadVideo(input, update.Message.From.Username, tmpDir, cookiesFile)
 	if err != nil {
 		log.Printf("Error downloading video: %s", err)
 		stats.AddDownloadError()

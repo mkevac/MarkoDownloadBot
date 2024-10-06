@@ -23,11 +23,12 @@ type Video struct {
 	Path     string
 	FileName string
 
-	randomName string
-	tmpDir     string
-	url        string
-	parsedUrl  *url.URL
-	user       string
+	randomName  string
+	tmpDir      string
+	url         string
+	parsedUrl   *url.URL
+	user        string
+	cookiesFile string
 }
 
 type CustomDuration int
@@ -81,12 +82,13 @@ func (d *CustomDuration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func DownloadVideo(videoUrl string, user string, tmpDir string) (*Video, error) {
+func DownloadVideo(videoUrl string, user string, tmpDir string, cookiesFile string) (*Video, error) {
 	res := &Video{
-		tmpDir:     tmpDir,
-		url:        videoUrl,
-		randomName: uuid.New().String(),
-		user:       user,
+		tmpDir:      tmpDir,
+		url:         videoUrl,
+		randomName:  uuid.New().String(),
+		user:        user,
+		cookiesFile: cookiesFile,
 	}
 
 	u, err := url.Parse(videoUrl)
@@ -231,6 +233,11 @@ func (video *Video) getCommandString() []string {
 	res = append(res, "-o")
 	res = append(res, tmpDir+"/"+video.randomName+".%(ext)s")
 	res = append(res, video.url)
+
+	if video.cookiesFile != "" {
+		res = append(res, "--cookies")
+		res = append(res, video.cookiesFile)
+	}
 
 	return res
 }

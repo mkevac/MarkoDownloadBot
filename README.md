@@ -16,6 +16,7 @@ TELEGRAM_API_ID=<api_id>
 TELEGRAM_API_HASH=<api_hash>
 TELEGRAM_BOT_API_TOKEN=<bot_token>
 ADMIN_USERNAME=<your_telegram_username>
+COOKIES_FILE=/path/to/your/cookies.txt
 ```
 6. Run the bot using docker compose: `docker compose up -d`
 7. Write `/start` to your new Telegram bot
@@ -24,6 +25,19 @@ ADMIN_USERNAME=<your_telegram_username>
 
 There is only one command: `/stats`. It gives you some basic statistics.
 Otherwise just send a URL to a bot and it will give you a video.
+
+## Custom Cookies File
+
+To use a custom cookies file with yt-dlp:
+
+1. Create a cookies file (e.g., `cookies.txt`) with the necessary cookies.
+2. Add the following line to your `.env` file:
+   ```
+   COOKIES_FILE=/path/to/your/cookies.txt
+   ```
+3. Restart the bot using `docker compose up -d`
+
+If no custom cookies file is specified, an empty cookies file will be used by default.
 
 ## Contributing
 

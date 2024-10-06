@@ -18,6 +18,7 @@ services:
       ADMIN_USERNAME: "${ADMIN_USERNAME}"
     volumes:
       - data:/var/lib/telegram-bot-api
+      - ${COOKIES_FILE:-./cookies.txt}:/var/lib/telegram-bot-api/cookies.txt
 
 volumes:
   data:
