@@ -143,15 +143,13 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 	// prepare stats message in Markdown format
 	var statsMessage strings.Builder
-	statsMessage.WriteString("*Stats*\n")
-	statsMessage.WriteString("```\n")
-	statsMessage.WriteString(fmt.Sprintf("Total requests: %d\n", totalRequests))
+	statsMessage.WriteString("*Stats*\n\n")
+	statsMessage.WriteString(fmt.Sprintf("Total requests: `%d`\n", totalRequests))
 	for username, count := range stats.Requests {
-		statsMessage.WriteString(fmt.Sprintf("%s: %d\n", username, count))
+		statsMessage.WriteString(fmt.Sprintf("@%s: `%d`\n", username, count))
 	}
-	statsMessage.WriteString(fmt.Sprintf("Download errors: %d\n", stats.DownloadErrors))
-	statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: %d\n", stats.UnrecognizedCommands))
-	statsMessage.WriteString("```")
+	statsMessage.WriteString(fmt.Sprintf("Download errors: `%d`\n", stats.DownloadErrors))
+	statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: `%d`\n", stats.UnrecognizedCommands))
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
