@@ -231,6 +231,13 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		return
 	}
 
+	fileSize, err := media.GetFileSize()
+	if err != nil {
+		log.Printf("Error getting file size: %s", err)
+	} else {
+		log.Printf("[%s]: %s downloaded to '%s' (size: %d bytes)", update.Message.From.Username, mediaType, media.Path, fileSize)
+	}
+
 	if audioOnly {
 		b.SendAudio(ctx, &bot.SendAudioParams{
 			ChatID: update.Message.Chat.ID,

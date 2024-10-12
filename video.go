@@ -150,6 +150,14 @@ func (media *Media) Delete() error {
 	return nil
 }
 
+func (media *Media) GetFileSize() (int64, error) {
+	info, err := os.Stat(media.Path)
+	if err != nil {
+		return 0, fmt.Errorf("error getting file info: %s", err)
+	}
+	return info.Size(), nil
+}
+
 func (media *Media) convert() error {
 	// we need to use ffmpeg to do some conversions
 	// this is the command to do that:
