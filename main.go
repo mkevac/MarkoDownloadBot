@@ -295,11 +295,13 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 
 	log.Printf("[%s]: %s sent", update.Message.From.Username, mediaType)
 
-	if err := media.Delete(); err != nil {
-		log.Printf("Error removing %s file: %s", mediaType, err)
-	}
+	/*
+		if err := media.Delete(); err != nil {
+			log.Printf("Error removing %s file: %s", mediaType, err)
+		}
 
-	log.Printf("[%s]: %s removed", update.Message.From.Username, mediaType)
+		log.Printf("[%s]: %s removed", update.Message.From.Username, mediaType)
+	*/
 }
 
 func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
