@@ -6,7 +6,7 @@ services:
       TELEGRAM_API_HASH: "${TELEGRAM_API_HASH}"
       TELEGRAM_LOCAL: "1"
     volumes:
-      - data:/var/lib/telegram-bot-api
+      - ./data:/app/data
     ports:
       - 127.0.0.1:8081:8081
   markodownloadbot:
@@ -17,8 +17,5 @@ services:
       TELEGRAM_BOT_API_TOKEN: "${TELEGRAM_BOT_API_TOKEN}"
       ADMIN_USERNAME: "${ADMIN_USERNAME}"
     volumes:
-      - data:/var/lib/telegram-bot-api
-      - ${COOKIES_FILE:-./cookies.txt}:/var/lib/telegram-bot-api/cookies.txt
-
-volumes:
-  data:
+      - ./data:/app/data
+      - ${COOKIES_FILE:-./cookies.txt}:/app/cookies.txt

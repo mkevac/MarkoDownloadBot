@@ -10,28 +10,52 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/joho/godotenv"
 	"github.com/mkevac/markodownloadbot/stats"
-)
-
-const (
-	tmpDir = "/var/lib/telegram-bot-api"
 )
 
 var (
 	adminUsername string
 	adminChatID   int64
+	tmpDir        string
+	isLocal       bool
 )
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Error loading .env file: %v", err)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	adminUsername = os.Getenv("ADMIN_USERNAME")
 	log.Printf("Admin username: %s", adminUsername)
+
+	isLocal = os.Getenv("IS_LOCAL") == "true"
+	tmpDirBase := "/app/data"
+	if isLocal {
+		tmpDirBase = "./data"
+	}
+
+	var err error
+	tmpDir, err = os.MkdirTemp(tmpDirBase, "telegram-bot-api-*")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v", err)
+	}
+	defer func() {
+		log.Printf("Removing temporary directory: %s", tmpDir)
+		if err := os.RemoveAll(tmpDir); err != nil {
+			log.Printf("Failed to remove temporary directory: %v", err)
+		}
+	}()
+
+	log.Printf("Using temporary directory: %s", tmpDir)
 
 	// Use http.FileServer to serve files from the specified directory
 	fileServer := http.FileServer(http.Dir(tmpDir))
@@ -42,13 +66,17 @@ func main() {
 	log.Println("Serving files on :8080")
 	go http.ListenAndServe(":8080", nil)
 
+	serverURL := "http://telegram-bot-api:8081"
+	if isLocal {
+		serverURL = "http://localhost:8081"
+	}
+
 	opts := []bot.Option{
 		bot.WithDefaultHandler(handler),
-		bot.WithServerURL("http://telegram-bot-api:8081"),
+		bot.WithServerURL(serverURL),
 	}
 
 	var b *bot.Bot
-	var err error
 
 	for {
 		b, err = bot.New(os.Getenv("TELEGRAM_BOT_API_TOKEN"), opts...)
@@ -81,7 +109,10 @@ func main() {
 		log.Println("Bot commands set successfully")
 	}
 
-	b.Start(ctx)
+	go b.Start(ctx)
+
+	<-ctx.Done()
+	log.Println("Received interrupt signal")
 }
 
 func saveAdminChatID(username string, chatID int64) {
@@ -206,12 +237,11 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		Text:   fmt.Sprintf("I will download the %s and send it to you shortly.", mediaType),
 	})
 
-	cookiesFile := filepath.Join(tmpDir, "cookies.txt")
-	if _, err := os.Stat(cookiesFile); os.IsNotExist(err) {
-		if _, err := os.Create(cookiesFile); err != nil {
-			log.Printf("Error creating empty cookies file: %s", err)
-		}
+	cookiesFile := os.Getenv("COOKIES_FILE")
+	if cookiesFile == "" {
+		cookiesFile = "/app/cookies.txt"
 	}
+	log.Printf("Using cookies file: %s", cookiesFile)
 
 	media, err := DownloadMedia(input, update.Message.From.Username, tmpDir, cookiesFile, audioOnly)
 	if err != nil {
@@ -238,15 +268,25 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		log.Printf("[%s]: %s downloaded to '%s' (size: %d bytes)", update.Message.From.Username, mediaType, media.Path, fileSize)
 	}
 
+	// fix media path if local
+	var pathToSend string
+	if isLocal {
+		pathToSend = filepath.Join("/app", media.Path)
+	} else {
+		pathToSend = media.Path
+	}
+
+	log.Printf("[%s]: media path to send: %s", update.Message.From.Username, pathToSend)
+
 	if audioOnly {
 		b.SendAudio(ctx, &bot.SendAudioParams{
 			ChatID: update.Message.Chat.ID,
-			Audio:  &models.InputFileString{Data: "file://" + media.Path},
+			Audio:  &models.InputFileString{Data: "file://" + pathToSend},
 		})
 	} else {
 		b.SendVideo(ctx, &bot.SendVideoParams{
 			ChatID:   update.Message.Chat.ID,
-			Video:    &models.InputFileString{Data: "file://" + media.Path},
+			Video:    &models.InputFileString{Data: "file://" + pathToSend},
 			Width:    media.Width,
 			Height:   media.Height,
 			Duration: (int)(media.Duration),
