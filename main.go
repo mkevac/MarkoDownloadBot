@@ -17,6 +17,8 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/joho/godotenv"
 	"github.com/mkevac/markodownloadbot/stats"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 var (
@@ -38,13 +40,17 @@ func main() {
 	log.Printf("Admin username: %s", adminUsername)
 
 	isLocal = os.Getenv("IS_LOCAL") == "true"
-	tmpDirBase := "/app/data"
+
+	dirBase := "/app/data"
 	if isLocal {
-		tmpDirBase = "./data"
+		dirBase = "./data"
 	}
 
+	// Initialize the stats package with the calculated dirBase
+	stats.Init(dirBase)
+
 	var err error
-	tmpDir, err = os.MkdirTemp(tmpDirBase, "telegram-bot-api-*")
+	tmpDir, err = os.MkdirTemp(dirBase, "telegram-bot-api-*")
 	if err != nil {
 		log.Fatalf("Failed to create temporary directory: %v", err)
 	}
@@ -157,7 +163,7 @@ func cleanupAndVerifyInput(input string) (string, error) {
 }
 
 func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
+	log.Printf("[%s]: received stats command", update.Message.From.Username)
 
 	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
 
@@ -170,28 +176,39 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	stats := stats.GetStats()
-
-	totalRequests := 0
-	for _, count := range stats.Requests {
-		totalRequests += count
-	}
-
-	// prepare stats message in Markdown format
+	periods := []string{"day", "week", "month", "overall"}
 	var statsMessage strings.Builder
 	statsMessage.WriteString("*Stats*\n\n")
-	statsMessage.WriteString(fmt.Sprintf("Total requests: `%d`\n", totalRequests))
-	for username, count := range stats.Requests {
-		statsMessage.WriteString(fmt.Sprintf("@%s: `%d`\n", username, count))
-	}
-	statsMessage.WriteString(fmt.Sprintf("Download errors: `%d`\n", stats.DownloadErrors))
-	statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: `%d`\n", stats.UnrecognizedCommands))
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	for _, period := range periods {
+		stats := stats.GetStats(period)
+
+		totalVideoRequests := sum(stats.VideoRequests)
+		totalAudioRequests := sum(stats.AudioRequests)
+
+		caser := cases.Title(language.English)
+		statsMessage.WriteString(fmt.Sprintf("*%s:*\n", caser.String(period)))
+		statsMessage.WriteString(fmt.Sprintf("Total video requests: `%d`\n", totalVideoRequests))
+		statsMessage.WriteString(fmt.Sprintf("Total audio requests: `%d`\n", totalAudioRequests))
+		statsMessage.WriteString(fmt.Sprintf("Download errors: `%d`\n", sum(stats.DownloadErrors)))
+		statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: `%d`\n", sum(stats.UnrecognizedCommands)))
+		statsMessage.WriteString("Per\\-user stats:\n")
+		for username := range stats.VideoRequests {
+			statsMessage.WriteString(fmt.Sprintf("@%s: Video: `%d`, Audio: `%d`, Errors: `%d`, Unrecognized: `%d`\n",
+				username, stats.VideoRequests[username], stats.AudioRequests[username],
+				stats.DownloadErrors[username], stats.UnrecognizedCommands[username]))
+		}
+		statsMessage.WriteString("\n")
+	}
+
+	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      statsMessage.String(),
 		ParseMode: models.ParseModeMarkdown,
 	})
+	if err != nil {
+		log.Printf("[%s]: Error sending stats message: %v", update.Message.From.Username, err)
+	}
 }
 
 func handler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -223,11 +240,15 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 			Text:   "Please send me a valid video or audio link",
 		})
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unrecognized command from @%s: %s", update.Message.From.Username, update.Message.Text))
-		stats.AddUnrecognizedCommand()
+		stats.AddUnrecognizedCommand(update.Message.From.Username)
 		return
 	}
 
-	stats.AddRequest(update.Message.From.Username)
+	if audioOnly {
+		stats.AddAudioRequest(update.Message.From.Username)
+	} else {
+		stats.AddVideoRequest(update.Message.From.Username)
+	}
 
 	var mediaType string
 	if audioOnly {
@@ -251,7 +272,7 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	media, err := DownloadMedia(input, update.Message.From.Username, tmpDir, cookiesFile, audioOnly)
 	if err != nil {
 		log.Printf("Error downloading %s: %s", mediaType, err)
-		stats.AddDownloadError()
+		stats.AddDownloadError(update.Message.From.Username)
 
 		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading %s from %s: %s",
 			update.Message.From.Username, mediaType, input, err.Error())
@@ -335,4 +356,13 @@ Note: Please ensure you have the rights to download and use the media you reques
 		Text:      helpMessage,
 		ParseMode: models.ParseModeHTML,
 	})
+}
+
+// Helper function to sum map values
+func sum(m map[string]int) int {
+	total := 0
+	for _, v := range m {
+		total += v
+	}
+	return total
 }
