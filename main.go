@@ -48,6 +48,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create temporary directory: %v", err)
 	}
+	if err := os.Chmod(tmpDir, 0755); err != nil {
+		log.Fatalf("Failed to set permissions on temporary directory: %v", err)
+	}
 	defer func() {
 		log.Printf("Removing temporary directory: %s", tmpDir)
 		if err := os.RemoveAll(tmpDir); err != nil {
