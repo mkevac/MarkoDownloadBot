@@ -15,10 +15,24 @@ help:
 .DEFAULT_GOAL := help
 
 docker:
-	docker buildx build -t mkevac/markodownloadbot --load .
+	@if [ -n "$$(git describe --tags --exact-match 2>/dev/null)" ]; then \
+		TAG="$$(git describe --tags --exact-match | sed 's/^v//')"; \
+		echo "Building Docker image with tag: $$TAG"; \
+		docker buildx build -t mkevac/markodownloadbot:$$TAG -t mkevac/markodownloadbot:latest --load .; \
+	else \
+		echo "No Git tag found. Building Docker image with 'latest' tag."; \
+		docker buildx build -t mkevac/markodownloadbot:latest --load .; \
+	fi
 
 push:
-	docker buildx build --platform linux/amd64,linux/arm64 -t mkevac/markodownloadbot --push .
+	@if [ -n "$$(git describe --tags --exact-match 2>/dev/null)" ]; then \
+		TAG="$$(git describe --tags --exact-match | sed 's/^v//')"; \
+		echo "Building and pushing Docker image with tag: $$TAG"; \
+		docker buildx build --platform linux/amd64,linux/arm64 -t mkevac/markodownloadbot:$$TAG -t mkevac/markodownloadbot:latest --push .; \
+	else \
+		echo "No Git tag found. Building and pushing Docker image with 'latest' tag."; \
+		docker buildx build --platform linux/amd64,linux/arm64 -t mkevac/markodownloadbot:latest --push .; \
+	fi
 
 run:
 	docker-compose up -d
