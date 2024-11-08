@@ -194,8 +194,9 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: `%d`\n", sum(stats.UnrecognizedCommands)))
 		statsMessage.WriteString("Per\\-user stats:\n")
 		for username := range stats.VideoRequests {
+			escapedUsername := bot.EscapeMarkdown(username)
 			statsMessage.WriteString(fmt.Sprintf("@%s: Video: `%d`, Audio: `%d`, Errors: `%d`, Unrecognized: `%d`\n",
-				username, stats.VideoRequests[username], stats.AudioRequests[username],
+				escapedUsername, stats.VideoRequests[username], stats.AudioRequests[username],
 				stats.DownloadErrors[username], stats.UnrecognizedCommands[username]))
 		}
 		statsMessage.WriteString("\n")
