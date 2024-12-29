@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -177,38 +178,79 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 
 	periods := []string{"day", "week", "month", "overall"}
-	var statsMessage strings.Builder
-	statsMessage.WriteString("*Stats*\n\n")
+
+	// Send summary stats first
+	var summaryMsg strings.Builder
+	summaryMsg.WriteString("*Summary Stats*\n\n")
 
 	for _, period := range periods {
 		stats := stats.GetStats(period)
-
 		totalVideoRequests := sum(stats.VideoRequests)
 		totalAudioRequests := sum(stats.AudioRequests)
 
 		caser := cases.Title(language.English)
-		statsMessage.WriteString(fmt.Sprintf("*%s:*\n", caser.String(period)))
-		statsMessage.WriteString(fmt.Sprintf("Total video requests: `%d`\n", totalVideoRequests))
-		statsMessage.WriteString(fmt.Sprintf("Total audio requests: `%d`\n", totalAudioRequests))
-		statsMessage.WriteString(fmt.Sprintf("Download errors: `%d`\n", sum(stats.DownloadErrors)))
-		statsMessage.WriteString(fmt.Sprintf("Unrecognized commands: `%d`\n", sum(stats.UnrecognizedCommands)))
-		statsMessage.WriteString("Per\\-user stats:\n")
-		for username := range stats.VideoRequests {
-			escapedUsername := bot.EscapeMarkdown(username)
-			statsMessage.WriteString(fmt.Sprintf("@%s: Video: `%d`, Audio: `%d`, Errors: `%d`, Unrecognized: `%d`\n",
-				escapedUsername, stats.VideoRequests[username], stats.AudioRequests[username],
-				stats.DownloadErrors[username], stats.UnrecognizedCommands[username]))
-		}
-		statsMessage.WriteString("\n")
+		summaryMsg.WriteString(fmt.Sprintf("*%s:* V:`%d` A:`%d` E:`%d`\n",
+			caser.String(period),
+			totalVideoRequests,
+			totalAudioRequests,
+			sum(stats.DownloadErrors)))
 	}
 
-	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      statsMessage.String(),
+		Text:      summaryMsg.String(),
 		ParseMode: models.ParseModeMarkdown,
 	})
-	if err != nil {
-		log.Printf("[%s]: Error sending stats message: %v", update.Message.From.Username, err)
+
+	// Send detailed per-period stats
+	for _, period := range periods {
+		stats := stats.GetStats(period)
+
+		var detailMsg strings.Builder
+		detailMsg.WriteString(fmt.Sprintf("*Detailed Stats \\- %s*\n\n", cases.Title(language.English).String(period)))
+
+		// Get top 10 users by total activity
+		type userStats struct {
+			username string
+			total    int
+		}
+
+		users := make([]userStats, 0)
+		for username, videoCount := range stats.VideoRequests {
+			total := videoCount +
+				stats.AudioRequests[username] +
+				stats.DownloadErrors[username] +
+				stats.UnrecognizedCommands[username]
+			users = append(users, userStats{username, total})
+		}
+
+		// Sort users by total activity
+		sort.Slice(users, func(i, j int) bool {
+			return users[i].total > users[j].total
+		})
+
+		// Show top 10 users
+		maxUsers := 10
+		if len(users) < maxUsers {
+			maxUsers = len(users)
+		}
+
+		detailMsg.WriteString("Top Users:\n")
+		for i := 0; i < maxUsers; i++ {
+			username := users[i].username
+			escapedUsername := bot.EscapeMarkdown(username)
+			detailMsg.WriteString(fmt.Sprintf("@%s: V:`%d` A:`%d` E:`%d`\n",
+				escapedUsername,
+				stats.VideoRequests[username],
+				stats.AudioRequests[username],
+				stats.DownloadErrors[username]))
+		}
+
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    update.Message.Chat.ID,
+			Text:      detailMsg.String(),
+			ParseMode: models.ParseModeMarkdown,
+		})
 	}
 }
 
