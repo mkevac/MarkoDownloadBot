@@ -17,8 +17,9 @@ FROM alpine:latest
 
 RUN apk add --no-cache yt-dlp
 
-# Set the working directory inside the container.
+# Set the working directory and HOME environment variable
 WORKDIR /app
+ENV HOME=/app
 
 # Copy the binary from the builder stage
 COPY --from=builder /app/markodownloadbot /app/markodownloadbot
