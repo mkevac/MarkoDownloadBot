@@ -44,7 +44,7 @@ build:
 	CGO_ENABLED=0 go build -o markodownloadbot .
 
 run-local: build
-	IS_LOCAL=true ./markodownloadbot
+	IS_LOCAL=true COOKIES_FILE=cookies.txt ./markodownloadbot
 
 run-api:
 	docker-compose up telegram-bot-api -d

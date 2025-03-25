@@ -244,7 +244,7 @@ func (media *Media) getCommandString() []string {
 	res = append(res, "--write-info-json")
 
 	if media.parsedUrl.Host == "www.youtube.com" || media.parsedUrl.Host == "youtube.com" || media.parsedUrl.Host == "youtu.be" {
-		if !media.audioOnly {
+		if !media.audioOnly && !strings.Contains(media.parsedUrl.Path, "shorts") {
 			res = append(res, "-f")
 			res = append(res, "bv[filesize<=1700M]+ba[filesize<=300M]")
 			res = append(res, "-S")
