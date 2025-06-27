@@ -100,20 +100,17 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 	}
 	res.parsedUrl = u
 
-	commandString := res.getCommandString()
+	// First attempt with full arguments
+	err = res.executeDownload(false)
+	if err != nil {
+		log.Printf("[%s]: First download attempt failed: %s", res.user, err)
 
-	log.Printf("[%s]: executing command: '%s'", res.user, strings.Join(commandString, " "))
-
-	cmd := exec.Command(commandString[0], commandString[1:]...)
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Output: %s\n", out.String())
-		log.Printf("Error: %s\n", stderr.String())
-		return nil, fmt.Errorf("command execution failed with %s", err)
+		// Second attempt with simplified arguments (no -f and -S)
+		log.Printf("[%s]: Retrying with simplified arguments", res.user)
+		err = res.executeDownload(true)
+		if err != nil {
+			return nil, fmt.Errorf("both download attempts failed: %s", err)
+		}
 	}
 
 	if audioOnly {
@@ -227,7 +224,7 @@ func (media *Media) populateInfo() error {
 	return nil
 }
 
-func (media *Media) getCommandString() []string {
+func (media *Media) getCommandString(simplified bool) []string {
 	var res []string
 
 	res = append(res, "yt-dlp")
@@ -244,7 +241,7 @@ func (media *Media) getCommandString() []string {
 	res = append(res, "--write-info-json")
 
 	if media.parsedUrl.Host == "www.youtube.com" || media.parsedUrl.Host == "youtube.com" || media.parsedUrl.Host == "youtu.be" {
-		if !media.audioOnly && !strings.Contains(media.parsedUrl.Path, "shorts") {
+		if !media.audioOnly && !strings.Contains(media.parsedUrl.Path, "shorts") && !simplified {
 			res = append(res, "-f")
 			res = append(res, "bv[filesize<=1700M]+ba[filesize<=300M]")
 			res = append(res, "-S")
@@ -267,4 +264,24 @@ func (media *Media) getCommandString() []string {
 	}
 
 	return res
+}
+
+func (media *Media) executeDownload(simplified bool) error {
+	commandString := media.getCommandString(simplified)
+
+	log.Printf("[%s]: executing command: '%s'", media.user, strings.Join(commandString, " "))
+
+	cmd := exec.Command(commandString[0], commandString[1:]...)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("Output: %s\n", out.String())
+		log.Printf("Error: %s\n", stderr.String())
+		return fmt.Errorf("command execution failed with %s", err)
+	}
+
+	return nil
 }
