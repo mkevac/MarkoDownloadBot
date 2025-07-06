@@ -1,4 +1,4 @@
-.PHONY: all push run stop build run-local run-api stop-api debug help
+.PHONY: all push run stop build run-local run-api stop-api debug test help
 
 # New default target that prints help information
 help:
@@ -8,6 +8,7 @@ help:
 	@echo "  run        - Start services using docker-compose"
 	@echo "  stop       - Stop docker-compose services"
 	@echo "  build      - Build the Go binary"
+	@echo "  test       - Run tests"
 	@echo "  debug      - Start API service and run locally"
 	@echo "Use 'make <target>' to execute a specific target."
 
@@ -51,5 +52,8 @@ run-api:
 
 stop-api:
 	docker-compose down
+
+test:
+	go test -v ./...
 
 debug: run-api run-local
