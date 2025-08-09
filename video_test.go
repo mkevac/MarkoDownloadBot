@@ -199,64 +199,6 @@ func TestMediaNeedsAudioConversion(t *testing.T) {
 	}
 }
 
-func TestMediaCalculateTargetBitrate(t *testing.T) {
-	media := &Media{
-		Duration: CustomDuration(60), // 1 minute
-	}
-
-	tests := []struct {
-		name           string
-		fileSize       int64
-		expectedMin    int64
-		expectedMax    int64
-		description    string
-	}{
-		{
-			name:           "small file",
-			fileSize:       10 * 1024 * 1024, // 10MB
-			expectedMin:    200000,            // minimum bitrate
-			expectedMax:    2000000,           // maximum bitrate
-			description:    "should be within bounds",
-		},
-		{
-			name:           "medium file",
-			fileSize:       100 * 1024 * 1024, // 100MB
-			expectedMin:    200000,             // minimum bitrate
-			expectedMax:    2000000,            // maximum bitrate
-			description:    "should calculate reasonable bitrate",
-		},
-		{
-			name:           "large file",
-			fileSize:       1000 * 1024 * 1024, // 1GB
-			expectedMin:    200000,              // minimum bitrate
-			expectedMax:    2000000,             // maximum bitrate (capped)
-			description:    "should be capped at maximum",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			analysis := &MediaAnalysis{
-				OriginalFileSize: tt.fileSize,
-			}
-
-			result := media.calculateTargetBitrate(analysis)
-
-			if result < tt.expectedMin {
-				t.Errorf("Target bitrate %d is below minimum %d", result, tt.expectedMin)
-			}
-
-			if result > tt.expectedMax {
-				t.Errorf("Target bitrate %d is above maximum %d", result, tt.expectedMax)
-			}
-
-			// Verify bitrate is reasonable (not zero)
-			if result <= 0 {
-				t.Errorf("Target bitrate should be positive, got %d", result)
-			}
-		})
-	}
-}
 
 func TestDetermineConversionStrategy(t *testing.T) {
 	tests := []struct {
@@ -266,8 +208,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 		fileSize                int64
 		expectedVideoConversion bool
 		expectedAudioConversion bool
-		expectedVideoType       string
-		expectedAudioType       string
+				expectedAudioType       string
 		expectedCompatible      bool
 	}{
 		{
@@ -277,8 +218,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: false,
 			expectedAudioConversion: false,
-			expectedVideoType:       "none",
-			expectedAudioType:       "copy",
+						expectedAudioType:       "copy",
 			expectedCompatible:      true,
 		},
 		{
@@ -288,8 +228,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: true,
 			expectedAudioConversion: false,
-			expectedVideoType:       "h265",
-			expectedAudioType:       "copy",
+						expectedAudioType:       "copy",
 			expectedCompatible:      false,
 		},
 		{
@@ -299,8 +238,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                200 * 1024 * 1024,
 			expectedVideoConversion: true,
 			expectedAudioConversion: false,
-			expectedVideoType:       "h265",
-			expectedAudioType:       "copy",
+						expectedAudioType:       "copy",
 			expectedCompatible:      false,
 		},
 		{
@@ -310,8 +248,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: false,
 			expectedAudioConversion: true,
-			expectedVideoType:       "none",
-			expectedAudioType:       "aac",
+						expectedAudioType:       "aac",
 			expectedCompatible:      false,
 		},
 		{
@@ -321,8 +258,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: true,
 			expectedAudioConversion: true,
-			expectedVideoType:       "h265",
-			expectedAudioType:       "aac",
+						expectedAudioType:       "aac",
 			expectedCompatible:      false,
 		},
 	}
@@ -351,9 +287,6 @@ func TestDetermineConversionStrategy(t *testing.T) {
 				t.Errorf("Expected audio conversion %v, got %v", tt.expectedAudioConversion, analysis.NeedsAudioConversion)
 			}
 
-			if analysis.VideoConversionType != tt.expectedVideoType {
-				t.Errorf("Expected video type %s, got %s", tt.expectedVideoType, analysis.VideoConversionType)
-			}
 
 			if analysis.AudioConversionType != tt.expectedAudioType {
 				t.Errorf("Expected audio type %s, got %s", tt.expectedAudioType, analysis.AudioConversionType)
@@ -645,16 +578,6 @@ func BenchmarkNeedsVideoConversion(b *testing.B) {
 	}
 }
 
-func BenchmarkCalculateTargetBitrate(b *testing.B) {
-	media := &Media{Duration: CustomDuration(60)}
-	analysis := &MediaAnalysis{
-		OriginalFileSize: 100 * 1024 * 1024,
-	}
-	
-	for i := 0; i < b.N; i++ {
-		media.calculateTargetBitrate(analysis)
-	}
-}
 
 func BenchmarkGetCommandString(b *testing.B) {
 	parsedUrl, _ := url.Parse("https://www.youtube.com/watch?v=test")

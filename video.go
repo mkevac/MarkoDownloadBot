@@ -37,10 +37,8 @@ type Media struct {
 type MediaAnalysis struct {
 	OriginalBitrate      int64
 	OriginalFileSize     int64
-	TargetBitrate        int64
 	NeedsVideoConversion bool
 	NeedsAudioConversion bool
-	VideoConversionType  string // "h264", "h265", "none"
 	AudioConversionType  string // "aac", "copy", "none"
 	OriginalVideoCodec   string
 	OriginalAudioCodec   string
@@ -247,14 +245,8 @@ func (media *Media) determineConversionStrategy(analysis *MediaAnalysis) {
 	analysis.NeedsVideoConversion = media.needsVideoConversion(analysis.OriginalVideoCodec)
 	analysis.NeedsAudioConversion = media.needsAudioConversion(analysis.OriginalAudioCodec)
 	
-	// Set conversion types based on analysis
-	if analysis.NeedsVideoConversion {
-		// Always use H.265 for better compression efficiency
-		// H.265 is well supported on modern iOS devices and provides superior compression
-		analysis.VideoConversionType = "h265"
-	} else {
-		analysis.VideoConversionType = "none"
-	}
+	// Video conversion strategy is determined by NeedsVideoConversion boolean
+	// When true: convert to H.264, when false: copy stream
 
 	// Set audio conversion type
 	if analysis.NeedsAudioConversion {
@@ -263,10 +255,7 @@ func (media *Media) determineConversionStrategy(analysis *MediaAnalysis) {
 		analysis.AudioConversionType = "copy"
 	}
 
-	// Calculate target bitrate for size optimization
-	if analysis.NeedsVideoConversion {
-		analysis.TargetBitrate = media.calculateTargetBitrate(analysis)
-	}
+	// CRF-based encoding will handle quality automatically
 
 	// Check if already iPhone/mobile compatible
 	analysis.IsAlreadyCompatible = !analysis.NeedsVideoConversion && !analysis.NeedsAudioConversion
@@ -321,36 +310,6 @@ func (media *Media) needsAudioConversion(codecName string) bool {
 	return false
 }
 
-// calculateTargetBitrate calculates optimal bitrate to maintain reasonable file size
-func (media *Media) calculateTargetBitrate(analysis *MediaAnalysis) int64 {
-	// Target: 110-120% of original file size
-	targetSizeRatio := 1.15 // 115% of original size
-	targetFileSize := int64(float64(analysis.OriginalFileSize) * targetSizeRatio)
-	
-	// Calculate duration in seconds
-	durationSeconds := int64(media.Duration)
-	if durationSeconds == 0 {
-		durationSeconds = 1 // Avoid division by zero
-	}
-	
-	// Calculate target bitrate: (target_size * 8) / duration_seconds
-	// Subtract some bitrate for audio (typically 128kbps)
-	audioBitrate := int64(128000) // 128kbps for audio
-	targetBitrate := (targetFileSize*8)/durationSeconds - audioBitrate
-	
-	// Ensure reasonable bounds
-	minBitrate := int64(200000)  // 200kbps minimum
-	maxBitrate := int64(2000000) // 2Mbps maximum
-	
-	if targetBitrate < minBitrate {
-		targetBitrate = minBitrate
-	}
-	if targetBitrate > maxBitrate {
-		targetBitrate = maxBitrate
-	}
-	
-	return targetBitrate
-}
 
 func (d *CustomDuration) UnmarshalJSON(b []byte) error {
 	var v string
@@ -455,8 +414,12 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 			if analysis.IsAlreadyCompatible {
 				log.Printf("[%s]: media is already iPhone compatible, no conversion needed", res.user)
 			} else {
+				videoAction := "copy"
+				if analysis.NeedsVideoConversion {
+					videoAction = "h264"
+				}
 				log.Printf("[%s]: media needs conversion - video: %s, audio: %s", 
-					res.user, analysis.VideoConversionType, analysis.AudioConversionType)
+					res.user, videoAction, analysis.AudioConversionType)
 				if err := res.convertIntelligent(analysis); err != nil {
 					return nil, fmt.Errorf("error converting video: %w", err)
 				}
@@ -493,39 +456,17 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 
 	// Video codec settings
 	if analysis.NeedsVideoConversion {
-		if analysis.VideoConversionType == "h265" {
-			// H.265 for better compression
-			cmdSlice = append(cmdSlice, "-c:v", "libx265")
-			
-			// Calculate bitrate in kbps
-			targetBitrateKbps := analysis.TargetBitrate / 1000
-			maxRateKbps := targetBitrateKbps + (targetBitrateKbps / 4) // 25% buffer
-			bufSizeKbps := maxRateKbps * 2
-			
-			cmdSlice = append(cmdSlice, "-b:v", fmt.Sprintf("%dk", targetBitrateKbps))
-			cmdSlice = append(cmdSlice, "-maxrate", fmt.Sprintf("%dk", maxRateKbps))
-			cmdSlice = append(cmdSlice, "-bufsize", fmt.Sprintf("%dk", bufSizeKbps))
-			
-			log.Printf("[%s]: using H.265 with target bitrate %dkbps", media.user, targetBitrateKbps)
-		} else {
-			// H.264 for compatibility
-			cmdSlice = append(cmdSlice, "-c:v", "libx264")
-			cmdSlice = append(cmdSlice, "-profile:v", "baseline", "-level:v", "3.1")
-			
-			// Calculate bitrate in kbps
-			targetBitrateKbps := analysis.TargetBitrate / 1000
-			maxRateKbps := targetBitrateKbps + (targetBitrateKbps / 4) // 25% buffer
-			bufSizeKbps := maxRateKbps * 2
-			
-			cmdSlice = append(cmdSlice, "-b:v", fmt.Sprintf("%dk", targetBitrateKbps))
-			cmdSlice = append(cmdSlice, "-maxrate", fmt.Sprintf("%dk", maxRateKbps))
-			cmdSlice = append(cmdSlice, "-bufsize", fmt.Sprintf("%dk", bufSizeKbps))
-			
-			log.Printf("[%s]: using H.264 with target bitrate %dkbps", media.user, targetBitrateKbps)
-		}
+		// H.264 with best practices for compatibility
+		cmdSlice = append(cmdSlice, "-c:v", "libx264")
+		cmdSlice = append(cmdSlice, "-profile:v", "baseline")
+		cmdSlice = append(cmdSlice, "-pix_fmt", "yuv420p")
+		cmdSlice = append(cmdSlice, "-crf", "23")
+		cmdSlice = append(cmdSlice, "-maxrate", "4.5M")
 		
-		// Keep original resolution - no upscaling
-		cmdSlice = append(cmdSlice, "-vf", fmt.Sprintf("scale=%d:%d", media.Width, media.Height))
+		// Smart scaling - cap at 1280px width, maintain aspect ratio, ensure even dimensions
+		cmdSlice = append(cmdSlice, "-vf", "scale='min(1280,iw)':-2")
+		
+		log.Printf("[%s]: using H.264 with CRF 23 and smart scaling", media.user)
 	} else {
 		// Copy video stream if no conversion needed
 		cmdSlice = append(cmdSlice, "-c:v", "copy")
@@ -534,8 +475,8 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 
 	// Audio codec settings
 	if analysis.NeedsAudioConversion {
-		cmdSlice = append(cmdSlice, "-c:a", "aac", "-b:a", "128k")
-		log.Printf("[%s]: converting audio to AAC", media.user)
+		cmdSlice = append(cmdSlice, "-c:a", "aac", "-ac", "2")
+		log.Printf("[%s]: converting audio to AAC stereo", media.user)
 	} else {
 		cmdSlice = append(cmdSlice, "-c:a", "copy")
 		log.Printf("[%s]: copying audio stream (no conversion needed)", media.user)
@@ -556,13 +497,6 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 	if err := cmd.Run(); err != nil {
 		log.Printf("FFmpeg Output: %s\n", out.String())
 		log.Printf("FFmpeg Error: %s\n", stderr.String())
-		
-		// Try H.264 fallback if H.265 failed
-		if analysis.VideoConversionType == "h265" {
-			log.Printf("[%s]: H.265 conversion failed, trying H.264 fallback", media.user)
-			analysis.VideoConversionType = "h264"
-			return media.convertIntelligent(analysis)
-		}
 		
 		return fmt.Errorf("ffmpeg conversion failed: %w", err)
 	}
