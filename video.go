@@ -90,25 +90,25 @@ func (media *Media) runFFProbe() (*FFProbeResult, error) {
 // selectBestVideoStream chooses the best video stream from available streams
 func selectBestVideoStream(streams []FFProbeStream) *FFProbeStream {
 	var videoStreams []*FFProbeStream
-	
+
 	// Collect all video streams
 	for i := range streams {
 		if streams[i].CodecType == "video" {
 			videoStreams = append(videoStreams, &streams[i])
 		}
 	}
-	
+
 	if len(videoStreams) == 0 {
 		return nil
 	}
-	
+
 	// First, check for default disposition
 	for _, stream := range videoStreams {
 		if stream.Disposition.Default == 1 {
 			return stream
 		}
 	}
-	
+
 	// If no default, select by quality (resolution)
 	bestStream := videoStreams[0]
 	for _, stream := range videoStreams[1:] {
@@ -116,32 +116,32 @@ func selectBestVideoStream(streams []FFProbeStream) *FFProbeStream {
 			bestStream = stream
 		}
 	}
-	
+
 	return bestStream
 }
 
 // selectBestAudioStream chooses the best audio stream from available streams
 func selectBestAudioStream(streams []FFProbeStream) *FFProbeStream {
 	var audioStreams []*FFProbeStream
-	
+
 	// Collect all audio streams
 	for i := range streams {
 		if streams[i].CodecType == "audio" {
 			audioStreams = append(audioStreams, &streams[i])
 		}
 	}
-	
+
 	if len(audioStreams) == 0 {
 		return nil
 	}
-	
+
 	// First, check for default disposition
 	for _, stream := range audioStreams {
 		if stream.Disposition.Default == 1 {
 			return stream
 		}
 	}
-	
+
 	// If no default, select by quality (channels, then bitrate)
 	bestStream := audioStreams[0]
 	for _, stream := range audioStreams[1:] {
@@ -149,7 +149,7 @@ func selectBestAudioStream(streams []FFProbeStream) *FFProbeStream {
 			bestStream = stream
 		}
 	}
-	
+
 	return bestStream
 }
 
@@ -158,15 +158,15 @@ func isVideoStreamBetter(stream1, stream2 *FFProbeStream) bool {
 	// Compare by resolution (width * height)
 	resolution1 := stream1.Width * stream1.Height
 	resolution2 := stream2.Width * stream2.Height
-	
+
 	if resolution1 != resolution2 {
 		return resolution1 > resolution2
 	}
-	
+
 	// If resolution is the same, compare by bitrate
 	bitrate1 := parseBitrate(stream1.BitRate)
 	bitrate2 := parseBitrate(stream2.BitRate)
-	
+
 	return bitrate1 > bitrate2
 }
 
@@ -176,11 +176,11 @@ func isAudioStreamBetter(stream1, stream2 *FFProbeStream) bool {
 	if stream1.Channels != stream2.Channels {
 		return stream1.Channels > stream2.Channels
 	}
-	
+
 	// If channel count is the same, compare by bitrate
 	bitrate1 := parseBitrate(stream1.BitRate)
 	bitrate2 := parseBitrate(stream2.BitRate)
-	
+
 	return bitrate1 > bitrate2
 }
 
@@ -189,12 +189,12 @@ func parseBitrate(bitrateStr string) int64 {
 	if bitrateStr == "" {
 		return 0
 	}
-	
+
 	bitrate, err := strconv.ParseInt(bitrateStr, 10, 64)
 	if err != nil {
 		return 0
 	}
-	
+
 	return bitrate
 }
 
@@ -244,7 +244,7 @@ func (media *Media) determineConversionStrategy(analysis *MediaAnalysis) {
 	// Check if video conversion is needed
 	analysis.NeedsVideoConversion = media.needsVideoConversion(analysis.OriginalVideoCodec)
 	analysis.NeedsAudioConversion = media.needsAudioConversion(analysis.OriginalAudioCodec)
-	
+
 	// Video conversion strategy is determined by NeedsVideoConversion boolean
 	// When true: convert to H.264, when false: copy stream
 
@@ -267,20 +267,20 @@ func (media *Media) needsVideoConversion(codecName string) bool {
 	if strings.HasPrefix(codecName, "av01") {
 		return true
 	}
-	
+
 	// VP9 (vp9, vp09): Poor hardware decode support on mobile devices, causes battery drain
 	if strings.HasPrefix(codecName, "vp9") || strings.HasPrefix(codecName, "vp09") {
 		return true
 	}
-	
+
 	// Note: HEVC is kept as-is since it's well supported on modern iOS devices (iOS 11+)
 	// and provides excellent compression efficiency
-	
+
 	// Also check the original yt-dlp detected codec for AV1/VP9
 	if strings.HasPrefix(media.VCodec, "av01") || strings.HasPrefix(media.VCodec, "vp09") {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -290,26 +290,25 @@ func (media *Media) needsAudioConversion(codecName string) bool {
 	if codecName == "aac" {
 		return false
 	}
-	
+
 	// Opus: Not supported in Safari/iOS browsers, mainly used in WebRTC/Discord
 	if codecName == "opus" {
 		return true
 	}
-	
+
 	// Vorbis: Limited mobile browser support, primarily desktop/Linux format
 	if codecName == "vorbis" {
 		return true
 	}
-	
+
 	// FLAC: Lossless format not supported on mobile browsers, creates large files
 	if codecName == "flac" {
 		return true
 	}
-	
+
 	// Other codecs (MP3, etc.) are generally compatible and don't need conversion
 	return false
 }
-
 
 func (d *CustomDuration) UnmarshalJSON(b []byte) error {
 	var v string
@@ -410,7 +409,7 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 			log.Printf("[%s]: warning - could not analyze media: %s, skipping conversion", res.user, err)
 		} else {
 			res.determineConversionStrategy(analysis)
-			
+
 			if analysis.IsAlreadyCompatible {
 				log.Printf("[%s]: media is already iPhone compatible, no conversion needed", res.user)
 			} else {
@@ -418,7 +417,7 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 				if analysis.NeedsVideoConversion {
 					videoAction = "h264"
 				}
-				log.Printf("[%s]: media needs conversion - video: %s, audio: %s", 
+				log.Printf("[%s]: media needs conversion - video: %s, audio: %s",
 					res.user, videoAction, analysis.AudioConversionType)
 				if err := res.convertIntelligent(analysis); err != nil {
 					return nil, fmt.Errorf("error converting video: %w", err)
@@ -446,7 +445,6 @@ func (media *Media) GetFileSize() (int64, error) {
 	return info.Size(), nil
 }
 
-
 // convertIntelligent performs intelligent conversion based on analysis
 func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 	outputPath := filepath.Join(media.tmpDir, media.randomName+"_converted.mp4")
@@ -462,10 +460,10 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 		cmdSlice = append(cmdSlice, "-pix_fmt", "yuv420p")
 		cmdSlice = append(cmdSlice, "-crf", "23")
 		cmdSlice = append(cmdSlice, "-maxrate", "4.5M")
-		
+
 		// Smart scaling - cap at 1280px width, maintain aspect ratio, ensure even dimensions
 		cmdSlice = append(cmdSlice, "-vf", "scale='min(1280,iw)':-2")
-		
+
 		log.Printf("[%s]: using H.264 with CRF 23 and smart scaling", media.user)
 	} else {
 		// Copy video stream if no conversion needed
@@ -497,7 +495,7 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 	if err := cmd.Run(); err != nil {
 		log.Printf("FFmpeg Output: %s\n", out.String())
 		log.Printf("FFmpeg Error: %s\n", stderr.String())
-		
+
 		return fmt.Errorf("ffmpeg conversion failed: %w", err)
 	}
 
@@ -505,8 +503,8 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 	newFileInfo, _ := os.Stat(outputPath)
 	if newFileInfo != nil {
 		compressionRatio := float64(newFileInfo.Size()) / float64(analysis.OriginalFileSize)
-		log.Printf("[%s]: conversion complete - size ratio: %.2f (%.1fMB → %.1fMB)", 
-			media.user, compressionRatio, 
+		log.Printf("[%s]: conversion complete - size ratio: %.2f (%.1fMB → %.1fMB)",
+			media.user, compressionRatio,
 			float64(analysis.OriginalFileSize)/(1024*1024),
 			float64(newFileInfo.Size())/(1024*1024))
 	}

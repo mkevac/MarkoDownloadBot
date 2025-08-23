@@ -130,7 +130,7 @@ func TestMediaNeedsVideoConversion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Reset media for each test
 			media.VCodec = ""
-			
+
 			// Test with ffprobe detected codec
 			result := media.needsVideoConversion(tt.codec)
 			if result != tt.expected {
@@ -199,7 +199,6 @@ func TestMediaNeedsAudioConversion(t *testing.T) {
 	}
 }
 
-
 func TestDetermineConversionStrategy(t *testing.T) {
 	tests := []struct {
 		name                    string
@@ -208,7 +207,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 		fileSize                int64
 		expectedVideoConversion bool
 		expectedAudioConversion bool
-				expectedAudioType       string
+		expectedAudioType       string
 		expectedCompatible      bool
 	}{
 		{
@@ -218,7 +217,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: false,
 			expectedAudioConversion: false,
-						expectedAudioType:       "copy",
+			expectedAudioType:       "copy",
 			expectedCompatible:      true,
 		},
 		{
@@ -228,7 +227,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: true,
 			expectedAudioConversion: false,
-						expectedAudioType:       "copy",
+			expectedAudioType:       "copy",
 			expectedCompatible:      false,
 		},
 		{
@@ -238,7 +237,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                200 * 1024 * 1024,
 			expectedVideoConversion: true,
 			expectedAudioConversion: false,
-						expectedAudioType:       "copy",
+			expectedAudioType:       "copy",
 			expectedCompatible:      false,
 		},
 		{
@@ -248,7 +247,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: false,
 			expectedAudioConversion: true,
-						expectedAudioType:       "aac",
+			expectedAudioType:       "aac",
 			expectedCompatible:      false,
 		},
 		{
@@ -258,7 +257,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 			fileSize:                50 * 1024 * 1024,
 			expectedVideoConversion: true,
 			expectedAudioConversion: true,
-						expectedAudioType:       "aac",
+			expectedAudioType:       "aac",
 			expectedCompatible:      false,
 		},
 	}
@@ -287,7 +286,6 @@ func TestDetermineConversionStrategy(t *testing.T) {
 				t.Errorf("Expected audio conversion %v, got %v", tt.expectedAudioConversion, analysis.NeedsAudioConversion)
 			}
 
-
 			if analysis.AudioConversionType != tt.expectedAudioType {
 				t.Errorf("Expected audio type %s, got %s", tt.expectedAudioType, analysis.AudioConversionType)
 			}
@@ -302,7 +300,7 @@ func TestDetermineConversionStrategy(t *testing.T) {
 func TestMediaGetCommandString(t *testing.T) {
 	tmpDir := "/tmp/test"
 	randomName := "test-uuid"
-	
+
 	tests := []struct {
 		name           string
 		url            string
@@ -462,7 +460,7 @@ func TestMediaDelete(t *testing.T) {
 	// Create a temporary file
 	tmpDir := os.TempDir()
 	testFile := filepath.Join(tmpDir, "test_delete_"+uuid.New().String()+".txt")
-	
+
 	file, err := os.Create(testFile)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
@@ -496,7 +494,7 @@ func TestMediaGetFileSize(t *testing.T) {
 	tmpDir := os.TempDir()
 	testFile := filepath.Join(tmpDir, "test_size_"+uuid.New().String()+".txt")
 	testContent := "Hello, World!"
-	
+
 	err := os.WriteFile(testFile, []byte(testContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
@@ -563,7 +561,7 @@ func TestDownloadMediaInvalidURL(t *testing.T) {
 // Benchmark tests
 func BenchmarkCustomDurationUnmarshal(b *testing.B) {
 	jsonInput := `"1:30:45"`
-	
+
 	for i := 0; i < b.N; i++ {
 		var duration CustomDuration
 		json.Unmarshal([]byte(jsonInput), &duration)
@@ -572,22 +570,21 @@ func BenchmarkCustomDurationUnmarshal(b *testing.B) {
 
 func BenchmarkNeedsVideoConversion(b *testing.B) {
 	media := &Media{VCodec: "h264"}
-	
+
 	for i := 0; i < b.N; i++ {
 		media.needsVideoConversion("av01")
 	}
 }
 
-
 func BenchmarkGetCommandString(b *testing.B) {
 	parsedUrl, _ := url.Parse("https://www.youtube.com/watch?v=test")
 	media := &Media{
-		tmpDir:    "/tmp/test",
-		url:       "https://www.youtube.com/watch?v=test",
-		parsedUrl: parsedUrl,
+		tmpDir:     "/tmp/test",
+		url:        "https://www.youtube.com/watch?v=test",
+		parsedUrl:  parsedUrl,
 		randomName: "test-uuid",
 	}
-	
+
 	for i := 0; i < b.N; i++ {
 		media.getCommandString(false)
 	}
@@ -597,7 +594,7 @@ func BenchmarkGetCommandString(b *testing.B) {
 func createTestMedia(t *testing.T) *Media {
 	tmpDir := os.TempDir()
 	testFile := filepath.Join(tmpDir, "test_"+uuid.New().String()+".mp4")
-	
+
 	// Create a dummy file
 	file, err := os.Create(testFile)
 	if err != nil {

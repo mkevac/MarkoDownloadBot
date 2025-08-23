@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,58 @@ var (
 	tmpDir        string
 	isLocal       bool
 )
+
+func updatePackages(ctx context.Context, b *bot.Bot) {
+	if isLocal {
+		log.Println("Skipping package update in local mode")
+		return
+	}
+
+	log.Println("Checking for package updates...")
+
+	cmd := exec.CommandContext(ctx, "apk", "update")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Error updating package index: %v", err)
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("❌ Package index update failed: %v", err))
+		return
+	}
+	log.Printf("Package index updated: %s", strings.TrimSpace(string(output)))
+
+	cmd = exec.CommandContext(ctx, "apk", "upgrade", "yt-dlp")
+	output, err = cmd.CombinedOutput()
+	outputStr := strings.TrimSpace(string(output))
+
+	if err != nil {
+		log.Printf("Error upgrading yt-dlp: %v", err)
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("❌ yt-dlp upgrade failed: %v", err))
+		return
+	}
+
+	if strings.Contains(outputStr, "Upgrading") || strings.Contains(outputStr, "Installing") {
+		log.Printf("yt-dlp updated: %s", outputStr)
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("✅ yt-dlp updated successfully:\n%s", outputStr))
+	} else {
+		log.Printf("yt-dlp already up to date: %s", outputStr)
+	}
+}
+
+func startUpdateScheduler(ctx context.Context, b *bot.Bot) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	updatePackages(ctx, b)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Update scheduler stopped")
+			return
+		case <-ticker.C:
+			updatePackages(ctx, b)
+		}
+	}
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -120,6 +173,8 @@ func main() {
 	}
 
 	go b.Start(ctx)
+
+	go startUpdateScheduler(ctx, b)
 
 	<-ctx.Done()
 	log.Println("Received interrupt signal")
