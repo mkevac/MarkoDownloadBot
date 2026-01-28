@@ -23,6 +23,7 @@ type Media struct {
 	ACodec   string         `json:"acodec"`
 	Path     string
 	FileName string
+	Title    string         `json:"title"`
 
 	randomName  string
 	tmpDir      string
@@ -310,6 +311,74 @@ func (media *Media) needsAudioConversion(codecName string) bool {
 	return false
 }
 
+// sanitizeFileName converts a video title to a safe, human-readable filename
+// Returns empty string if the title cannot be sanitized to a valid filename
+func sanitizeFileName(title string) string {
+	if title == "" {
+		return ""
+	}
+
+	// Define character replacements for filesystem safety
+	replacements := map[rune]rune{
+		'/':  '-',
+		'\\': '-',
+		'<':  '-',
+		'>':  '-',
+		':':  '-',
+		'"':  '-',
+		'|':  '-',
+		'?':  0,
+		'*':  0,
+	}
+
+	var result strings.Builder
+	for _, char := range title {
+		// Skip control characters (ASCII 0-31)
+		if char < 32 {
+			continue
+		}
+
+		// Replace problematic characters
+		if replacement, exists := replacements[char]; exists {
+			if replacement != 0 {
+				result.WriteRune(replacement)
+			}
+			continue
+		}
+
+		result.WriteRune(char)
+	}
+
+	sanitized := result.String()
+
+	// Trim leading/trailing spaces and dots
+	sanitized = strings.Trim(sanitized, " .")
+
+	// Collapse multiple spaces into one
+	for strings.Contains(sanitized, "  ") {
+		sanitized = strings.ReplaceAll(sanitized, "  ", " ")
+	}
+
+	// Aggressive truncation at 100 chars for mobile display
+	if len(sanitized) > 100 {
+		// Try to truncate at word boundary
+		truncated := sanitized[:100]
+		if lastSpace := strings.LastIndex(truncated, " "); lastSpace > 70 {
+			sanitized = truncated[:lastSpace]
+		} else {
+			sanitized = truncated
+		}
+	}
+
+	// Final validation - ensure not empty after sanitization
+	sanitized = strings.TrimSpace(sanitized)
+	if sanitized == "" {
+		return ""
+	}
+
+	return sanitized
+}
+
 func (d *CustomDuration) UnmarshalJSON(b []byte) error {
 	var v string
 	if err := json.Unmarshal(b, &v); err != nil {
@@ -398,6 +467,12 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 		return nil, fmt.Errorf("error populating info: %w", err)
 	}
 
+	// Rename file to human-readable name if title is available
+	if err := res.renameToReadableName(); err != nil {
+		// Log warning but continue - UUID name still works fine
+		log.Printf("[%s]: warning - could not rename to readable name: %s, keeping UUID name", res.user, err)
+	}
+
 	if audioOnly {
 		log.Printf("[%s]: audio format '%s'", res.user, res.ACodec)
 	} else {
@@ -447,7 +522,16 @@ func (media *Media) GetFileSize() (int64, error) {
 
 // convertIntelligent performs intelligent conversion based on analysis
 func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
-	outputPath := filepath.Join(media.tmpDir, media.randomName+"_converted.mp4")
+	// If we have a readable filename, maintain it with _converted suffix
+	var outputFileName string
+	if media.FileName != "" {
+		// Remove extension, add _converted suffix, add extension back
+		baseName := strings.TrimSuffix(media.FileName, filepath.Ext(media.FileName))
+		outputFileName = baseName + "_converted.mp4"
+	} else {
+		outputFileName = media.randomName + "_converted.mp4"
+	}
+	outputPath := filepath.Join(media.tmpDir, outputFileName)
 
 	var cmdSlice []string
 	cmdSlice = append(cmdSlice, "ffmpeg", "-i", media.Path)
@@ -510,7 +594,7 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 	}
 
 	media.Path = outputPath
-	media.FileName = media.randomName + "_converted.mp4"
+	media.FileName = outputFileName
 
 	// Clean up original file
 	if err := os.Remove(filepath.Join(media.tmpDir, media.randomName+".mp4")); err != nil {
@@ -535,6 +619,49 @@ func (media *Media) populateInfo() error {
 	if err := os.Remove(jsonPath); err != nil {
 		return fmt.Errorf("error deleting json file '%s': %w", jsonPath, err)
 	}
+
+	return nil
+}
+
+// renameToReadableName renames the media file from UUID to human-readable name based on title
+func (media *Media) renameToReadableName() error {
+	if media.Title == "" {
+		return fmt.Errorf("no title available")
+	}
+
+	sanitizedTitle := sanitizeFileName(media.Title)
+	if sanitizedTitle == "" {
+		return fmt.Errorf("title sanitization resulted in empty string")
+	}
+
+	// Determine extension
+	extension := ".mp4"
+	if media.audioOnly {
+		extension = ".mp3"
+	}
+
+	// Build new filename
+	newFileName := sanitizedTitle + extension
+	newPath := filepath.Join(media.tmpDir, newFileName)
+
+	// Handle collision (unlikely in temp directory but possible)
+	if _, err := os.Stat(newPath); err == nil {
+		// File exists, append short UUID to make unique
+		newFileName = sanitizedTitle + "_" + media.randomName[:8] + extension
+		newPath = filepath.Join(media.tmpDir, newFileName)
+	}
+
+	// Rename the file
+	if err := os.Rename(media.Path, newPath); err != nil {
+		return fmt.Errorf("failed to rename file: %w", err)
+	}
+
+	// Update media struct
+	oldPath := media.Path
+	media.Path = newPath
+	media.FileName = newFileName
+
+	log.Printf("[%s]: renamed file from '%s' to '%s'", media.user, filepath.Base(oldPath), newFileName)
 
 	return nil
 }
