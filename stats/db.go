@@ -45,6 +45,21 @@ func initDB() {
 	if err != nil {
 		log.Fatalf("Error creating events table: %v", err)
 	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			chat_id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT,
+			is_active BOOLEAN DEFAULT 1,
+			last_interaction DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		log.Fatalf("Error creating users table: %v", err)
+	}
 }
 
 func getDB() *sql.DB {
@@ -54,6 +69,49 @@ func getDB() *sql.DB {
 
 func addEvent(username, eventType string) error {
 	_, err := getDB().Exec("INSERT INTO events (username, event_type) VALUES (?, ?)", username, eventType)
+	return err
+}
+
+func registerUser(chatID int64, username, firstName, lastName string) error {
+	_, err := getDB().Exec(`
+		INSERT INTO users (chat_id, username, first_name, last_name, is_active, last_interaction, created_at)
+		VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(chat_id) DO UPDATE SET
+			username = excluded.username,
+			first_name = excluded.first_name,
+			last_name = excluded.last_name,
+			is_active = 1,
+			last_interaction = CURRENT_TIMESTAMP
+	`, chatID, username, firstName, lastName)
+	return err
+}
+
+func getAllUserChatIDs() ([]int64, error) {
+	rows, err := getDB().Query("SELECT chat_id FROM users WHERE is_active = 1 ORDER BY last_interaction DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chatIDs []int64
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, err
+		}
+		chatIDs = append(chatIDs, chatID)
+	}
+	return chatIDs, nil
+}
+
+func getUserCount() (int, error) {
+	var count int
+	err := getDB().QueryRow("SELECT COUNT(*) FROM users WHERE is_active = 1").Scan(&count)
+	return count, err
+}
+
+func markUserInactive(chatID int64) error {
+	_, err := getDB().Exec("UPDATE users SET is_active = 0 WHERE chat_id = ?", chatID)
 	return err
 }
 

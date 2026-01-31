@@ -145,7 +145,13 @@ func main() {
 		b, err = bot.New(os.Getenv("TELEGRAM_BOT_API_TOKEN"), opts...)
 		if err != nil {
 			log.Printf("Error creating bot: %s", err)
-			time.Sleep(time.Second * 5)
+			select {
+			case <-ctx.Done():
+				log.Println("Shutdown signal received during bot initialization")
+				return
+			case <-time.After(time.Second * 5):
+				// Retry after 5 seconds
+			}
 		} else {
 			break
 		}
@@ -155,6 +161,8 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/audio", bot.MatchTypePrefix, audioHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, helpHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, helpHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/broadcast", bot.MatchTypePrefix, broadcastHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/users", bot.MatchTypeExact, usersHandler)
 
 	success, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
 		Commands: []models.BotCommand{
@@ -162,6 +170,8 @@ func main() {
 			{Command: "help", Description: "Show help information"},
 			{Command: "audio", Description: "Download audio"},
 			{Command: "stats", Description: "Show stats (admin only)"},
+			{Command: "users", Description: "Show user count (admin only)"},
+			{Command: "broadcast", Description: "Broadcast message (admin only)"},
 		},
 	})
 	if err != nil {
@@ -222,6 +232,7 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received stats command", update.Message.From.Username)
 
 	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.From.Username != adminUsername {
 		b.SendMessage(ctx, &bot.SendMessageParams{
@@ -330,6 +341,7 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
 	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	input, err := cleanupAndVerifyInput(input)
 	if err != nil {
@@ -426,23 +438,121 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	log.Printf("[%s]: %s removed", update.Message.From.Username, mediaType)
 }
 
+func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	log.Printf("[%s]: received broadcast command", update.Message.From.Username)
+
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+
+	if update.Message.From.Username != adminUsername {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "You are not authorized to use this command",
+		})
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unauthorized access to /broadcast command from @%s", update.Message.From.Username))
+		return
+	}
+
+	// Extract the message to broadcast
+	message := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/broadcast"))
+	if message == "" {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /broadcast <message>\nExample: /broadcast Hello everyone!",
+		})
+		return
+	}
+
+	// Send confirmation
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   "Broadcasting message to all users...",
+	})
+
+	// Create send function
+	sendFunc := func(ctx context.Context, chatID int64, msg string) error {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   msg,
+		})
+		return err
+	}
+
+	// Broadcast the message
+	result := stats.BroadcastMessage(ctx, message, sendFunc)
+
+	// Send result to admin
+	resultMsg := fmt.Sprintf("Broadcast complete!\n\nSent: %d\nFailed: %d", result.Sent, result.Failed)
+
+	if result.BlockedByUser > 0 {
+		resultMsg += fmt.Sprintf("\nBlocked/Inactive: %d (marked as inactive)", result.BlockedByUser)
+	}
+
+	if len(result.Errors) > 0 && len(result.Errors) <= 5 {
+		resultMsg += fmt.Sprintf("\n\nOther Errors:\n%s", strings.Join(result.Errors, "\n"))
+	} else if len(result.Errors) > 5 {
+		resultMsg += fmt.Sprintf("\n\nOther Errors: %d (showing first 5):\n%s", len(result.Errors), strings.Join(result.Errors[:5], "\n"))
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   resultMsg,
+	})
+}
+
+func usersHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	log.Printf("[%s]: received users command", update.Message.From.Username)
+
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+
+	if update.Message.From.Username != adminUsername {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "You are not authorized to use this command",
+		})
+		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unauthorized access to /users command from @%s", update.Message.From.Username))
+		return
+	}
+
+	count, err := stats.GetUserCount()
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("Error getting user count: %v", err),
+		})
+		return
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("Total registered users: %d", count),
+	})
+}
+
 func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
+
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	helpMessage := `<b>Welcome to the Marko Download Bot!</b>
 
 Here's how you can use me:
 
-1. <b>Download Video:</b> 
+1. <b>Download Video:</b>
    Simply send a video URL, and I'll download and send the video to you.
 
-2. <code>/audio [URL]</code>: 
+2. <code>/audio [URL]</code>:
    Use this command followed by an audio URL to download and receive audio files.
 
-3. <code>/stats</code>: 
+3. <code>/stats</code>:
    (Admin only) View usage statistics of the bot.
 
-4. <code>/help</code> or <code>/start</code>: 
+4. <code>/users</code>:
+   (Admin only) View total number of registered users.
+
+5. <code>/broadcast [message]</code>:
+   (Admin only) Send a message to all bot users.
+
+6. <code>/help</code> or <code>/start</code>:
    Display this help message.
 
 To download media, just send me a valid video or audio link. I'll take care of the rest!

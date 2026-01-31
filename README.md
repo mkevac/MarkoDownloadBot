@@ -23,17 +23,45 @@ COOKIES_FILE=/path/to/your/cookies.txt
 
 ## Usage
 
-The bot supports the following commands:
+### User Commands
 
 1. **Video Download**: Simply send a URL to the bot, and it will download and send the video to you.
 
 2. `/audio [URL]`: Use this command followed by an audio URL to download and receive audio files.
 
-3. `/stats`: (Admin only) Provides basic usage statistics of the bot.
+3. `/help` or `/start`: Displays a help message with information about how to use the bot.
 
-4. `/help` or `/start`: Displays a help message with information about how to use the bot.
+### Admin Commands
+
+The following commands are available only to the admin user specified in `ADMIN_USERNAME`:
+
+1. `/stats`: Provides detailed usage statistics of the bot, including video/audio requests, errors, and top users.
+
+2. `/users`: Shows the total number of registered active users.
+
+3. `/broadcast <message>`: Sends a message to all active bot users. Example:
+   ```
+   /broadcast Hello! The bot will be down for maintenance at 10 PM.
+   ```
+
+   The broadcast feature automatically:
+   - Tracks which users have blocked the bot
+   - Marks blocked users as inactive
+   - Reactivates users when they return
+   - Only sends messages to active users
 
 To download media, just send a valid video or audio link to the bot, and it will handle the rest!
+
+## User Management
+
+The bot automatically tracks all users who interact with it, storing their:
+- Chat ID
+- Username
+- First and last name
+- Active status
+- Last interaction timestamp
+
+When users block the bot, they are automatically marked as inactive and won't receive future broadcasts. If they return and interact with the bot again, they are automatically reactivated.
 
 ## Custom Cookies File
 
