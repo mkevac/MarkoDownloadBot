@@ -564,7 +564,7 @@ func BenchmarkCustomDurationUnmarshal(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		var duration CustomDuration
-		json.Unmarshal([]byte(jsonInput), &duration)
+		_ = json.Unmarshal([]byte(jsonInput), &duration)
 	}
 }
 

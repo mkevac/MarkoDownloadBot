@@ -1,4 +1,4 @@
-.PHONY: all push run stop build run-local run-api stop-api debug test help
+.PHONY: all push run stop build run-local run-api stop-api debug test lint help
 
 # New default target that prints help information
 help:
@@ -9,6 +9,7 @@ help:
 	@echo "  stop       - Stop docker-compose services"
 	@echo "  build      - Build the Go binary"
 	@echo "  test       - Run tests"
+	@echo "  lint       - Run golangci-lint"
 	@echo "  debug      - Start API service and run locally"
 	@echo "Use 'make <target>' to execute a specific target."
 
@@ -55,5 +56,9 @@ stop-api:
 
 test:
 	go test -v ./...
+
+lint:
+	@which golangci-lint > /dev/null 2>&1 || { echo "Installing golangci-lint..."; go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; }
+	golangci-lint run ./...
 
 debug: run-api run-local

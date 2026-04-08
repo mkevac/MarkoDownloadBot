@@ -127,7 +127,11 @@ func main() {
 	http.Handle("/", fileServer)
 
 	log.Println("Serving files on :8080")
-	go http.ListenAndServe(":8080", nil)
+	go func() {
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			log.Fatalf("File server failed: %v", err)
+		}
+	}()
 
 	serverURL := "http://telegram-bot-api:8081"
 	if isLocal {
@@ -201,10 +205,12 @@ func sendMessageToAdmin(ctx context.Context, b *bot.Bot, text string) {
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: adminChatID,
 		Text:   text,
-	})
+	}); err != nil {
+		log.Printf("Error sending message to admin: %v", err)
+	}
 }
 
 func cleanupAndVerifyInput(input string) (string, error) {
@@ -235,10 +241,12 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.From.Username != adminUsername {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
-		})
+		}); err != nil {
+			log.Printf("Error sending unauthorized message: %v", err)
+		}
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unauthorized access to /stats command from @%s", update.Message.From.Username))
 		return
 	}
@@ -262,11 +270,13 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 			sum(stats.DownloadErrors)))
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      summaryMsg.String(),
 		ParseMode: models.ParseModeMarkdown,
-	})
+	}); err != nil {
+		log.Printf("Error sending stats summary: %v", err)
+	}
 
 	// Send detailed per-period stats
 	for _, period := range periods {
@@ -312,11 +322,13 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 				stats.DownloadErrors[username]))
 		}
 
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:    update.Message.Chat.ID,
 			Text:      detailMsg.String(),
 			ParseMode: models.ParseModeMarkdown,
-		})
+		}); err != nil {
+			log.Printf("Error sending detailed stats: %v", err)
+		}
 	}
 }
 
@@ -345,10 +357,12 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 
 	input, err := cleanupAndVerifyInput(input)
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Please send me a valid video or audio link",
-		})
+		}); err != nil {
+			log.Printf("[%s]: error sending invalid URL message: %v", update.Message.From.Username, err)
+		}
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unrecognized command from @%s: %s", update.Message.From.Username, update.Message.Text))
 		stats.AddUnrecognizedCommand(update.Message.From.Username)
 		return
@@ -368,10 +382,12 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	}
 	log.Printf("[%s]: %s url: '%s'", update.Message.From.Username, mediaType, input)
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("I will download the %s and send it to you shortly.", mediaType),
-	})
+	}); err != nil {
+		log.Printf("[%s]: error sending download notification: %v", update.Message.From.Username, err)
+	}
 
 	cookiesFile := os.Getenv("COOKIES_FILE")
 	if cookiesFile == "" {
@@ -387,10 +403,12 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading %s from %s: %s",
 			update.Message.From.Username, mediaType, input, err.Error())
 
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   errorMsg,
-		})
+		}); err != nil {
+			log.Printf("[%s]: error sending download error message: %v", update.Message.From.Username, err)
+		}
 
 		sendMessageToAdmin(ctx, b, errorMsg)
 
@@ -415,18 +433,22 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	log.Printf("[%s]: media path to send: %s", update.Message.From.Username, pathToSend)
 
 	if audioOnly {
-		b.SendAudio(ctx, &bot.SendAudioParams{
+		if _, err := b.SendAudio(ctx, &bot.SendAudioParams{
 			ChatID: update.Message.Chat.ID,
 			Audio:  &models.InputFileString{Data: "file://" + pathToSend},
-		})
+		}); err != nil {
+			log.Printf("[%s]: error sending %s: %v", update.Message.From.Username, mediaType, err)
+		}
 	} else {
-		b.SendVideo(ctx, &bot.SendVideoParams{
+		if _, err := b.SendVideo(ctx, &bot.SendVideoParams{
 			ChatID:   update.Message.Chat.ID,
 			Video:    &models.InputFileString{Data: "file://" + pathToSend},
 			Width:    media.Width,
 			Height:   media.Height,
 			Duration: (int)(media.Duration),
-		})
+		}); err != nil {
+			log.Printf("[%s]: error sending %s: %v", update.Message.From.Username, mediaType, err)
+		}
 	}
 
 	log.Printf("[%s]: %s sent", update.Message.From.Username, mediaType)
@@ -444,10 +466,12 @@ func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.From.Username != adminUsername {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
-		})
+		}); err != nil {
+			log.Printf("Error sending unauthorized message: %v", err)
+		}
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unauthorized access to /broadcast command from @%s", update.Message.From.Username))
 		return
 	}
@@ -455,18 +479,22 @@ func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	// Extract the message to broadcast
 	message := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/broadcast"))
 	if message == "" {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Usage: /broadcast <message>\nExample: /broadcast Hello everyone!",
-		})
+		}); err != nil {
+			log.Printf("Error sending broadcast usage: %v", err)
+		}
 		return
 	}
 
 	// Send confirmation
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   "Broadcasting message to all users...",
-	})
+	}); err != nil {
+		log.Printf("Error sending broadcast confirmation: %v", err)
+	}
 
 	// Create send function
 	sendFunc := func(ctx context.Context, chatID int64, msg string) error {
@@ -493,10 +521,12 @@ func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		resultMsg += fmt.Sprintf("\n\nOther Errors: %d (showing first 5):\n%s", len(result.Errors), strings.Join(result.Errors[:5], "\n"))
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   resultMsg,
-	})
+	}); err != nil {
+		log.Printf("Error sending broadcast result: %v", err)
+	}
 }
 
 func usersHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -505,27 +535,33 @@ func usersHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.From.Username != adminUsername {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
-		})
+		}); err != nil {
+			log.Printf("Error sending unauthorized message: %v", err)
+		}
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unauthorized access to /users command from @%s", update.Message.From.Username))
 		return
 	}
 
 	count, err := stats.GetUserCount()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("Error getting user count: %v", err),
-		})
+		}); err != nil {
+			log.Printf("Error sending user count error: %v", err)
+		}
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("Total registered users: %d", count),
-	})
+	}); err != nil {
+		log.Printf("Error sending user count: %v", err)
+	}
 }
 
 func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -559,11 +595,13 @@ To download media, just send me a valid video or audio link. I'll take care of t
 
 Note: Please ensure you have the rights to download and use the media you request.`
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      helpMessage,
 		ParseMode: models.ParseModeHTML,
-	})
+	}); err != nil {
+		log.Printf("[%s]: error sending help message: %v", update.Message.From.Username, err)
+	}
 }
 
 // Helper function to sum map values
