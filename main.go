@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 
 var (
 	adminUsername string
-	adminChatID   int64
+	adminChatID   atomic.Int64
 	tmpDir        string
 	isLocal       bool
 )
@@ -196,17 +197,18 @@ func main() {
 
 func saveAdminChatID(username string, chatID int64) {
 	if adminUsername != "" && adminUsername == username {
-		adminChatID = chatID
+		adminChatID.Store(chatID)
 	}
 }
 
 func sendMessageToAdmin(ctx context.Context, b *bot.Bot, text string) {
-	if adminChatID == 0 {
+	chatID := adminChatID.Load()
+	if chatID == 0 {
 		return
 	}
 
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: adminChatID,
+		ChatID: chatID,
 		Text:   text,
 	}); err != nil {
 		log.Printf("Error sending message to admin: %v", err)
