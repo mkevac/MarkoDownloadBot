@@ -23,7 +23,7 @@ type Media struct {
 	ACodec   string         `json:"acodec"`
 	Path     string
 	FileName string
-	Title    string         `json:"title"`
+	Title    string `json:"title"`
 
 	randomName  string
 	tmpDir      string
@@ -593,13 +593,14 @@ func (media *Media) convertIntelligent(analysis *MediaAnalysis) error {
 			float64(newFileInfo.Size())/(1024*1024))
 	}
 
-	media.Path = outputPath
-	media.FileName = outputFileName
-
-	// Clean up original file
-	if err := os.Remove(filepath.Join(media.tmpDir, media.randomName+".mp4")); err != nil {
+	// Clean up original file before updating media.Path
+	inputPath := media.Path
+	if err := os.Remove(inputPath); err != nil {
 		log.Printf("error deleting original file: %s", err)
 	}
+
+	media.Path = outputPath
+	media.FileName = outputFileName
 
 	return nil
 }
