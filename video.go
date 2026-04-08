@@ -360,9 +360,10 @@ func sanitizeFileName(title string) string {
 	}
 
 	// Aggressive truncation at 100 chars for mobile display
-	if len(sanitized) > 100 {
+	runes := []rune(sanitized)
+	if len(runes) > 100 {
 		// Try to truncate at word boundary
-		truncated := sanitized[:100]
+		truncated := string(runes[:100])
 		if lastSpace := strings.LastIndex(truncated, " "); lastSpace > 70 {
 			sanitized = truncated[:lastSpace]
 		} else {
