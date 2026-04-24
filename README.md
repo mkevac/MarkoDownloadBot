@@ -76,6 +76,20 @@ To use a custom cookies file with yt-dlp:
 
 If no custom cookies file is specified, an empty cookies file will be used by default.
 
+## Media Limits and Testing
+
+The bot prefers H.264/AAC MP4 formats and only falls back to ffmpeg conversion when ffprobe shows the downloaded media is not mobile-compatible.
+
+Runtime limits can be adjusted with environment variables:
+
+```
+MAX_MEDIA_FILESIZE=250M
+YT_DLP_TIMEOUT_SECONDS=900
+FFMPEG_TIMEOUT_SECONDS=300
+```
+
+Regression URLs gathered from production logs are kept in `testdata/regression-urls.txt`.
+
 ## Contributing
 
 Contributions are welcome! If you have any ideas or improvements, feel free to submit a pull request.

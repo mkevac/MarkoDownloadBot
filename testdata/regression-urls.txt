@@ -1,0 +1,29 @@
+# URLs observed in production logs on 2026-04-23/2026-04-24.
+# Keep this file to regression-test yt-dlp format selection after extractor updates.
+https://youtube.com/shorts/qwwJOkjPyMA?si=i1iGQbgcrgyYE7Q3
+https://www.instagram.com/reel/DV9ysP7En_6/?igsh=eGhvcG5sZHY2Zml0
+https://youtube.com/shorts/A347UpvO60Q?si=6XNujA0XdPl2IbSj
+https://youtube.com/shorts/8D5Ko8KW-uw?si=QC62Z4lA9D-kVdvd
+https://www.instagram.com/reel/DWrVPh9RmlC/?igsh=a3Uwd2E5eGcwM2tz
+https://www.instagram.com/reel/DXWC9Y3CDCZ/?igsh=enNlNDN6cDJwa2k0
+https://www.instagram.com/stories/alshvl/3881728877605628699?utm_source=ig_story_item_share&igsh=MWEydG13OGtuOGQ2aQ==
+https://www.instagram.com/reel/DXeiT6NH-Po/?igsh=bzVwdGVkOXA5c2Jx
+https://x.com/Caughttincctv/status/2047269341595648399?s=20
+https://www.instagram.com/reel/DXbZE9sAgOd/?igsh=MXVtcGJhYmR1YXAzZg==
+https://www.instagram.com/reel/DXO3VVJk2jp/?igsh=MW16ODFnaHA3MmxjYg==
+https://www.instagram.com/reel/DXRi2YZiHXg/?igsh=YnV1OWlwOHNxYXc=
+https://www.instagram.com/reel/DXUz5bxDTf4/?igsh=MXJ3dW8xN2Z4MWU2Ng==
+https://www.instagram.com/reel/DXaCir5gv2f/?igsh=MWc5ZmEyN3lidWt4cw==
+https://www.instagram.com/reel/DXJQ5Z6DOy9/?igsh=MXJkMXJhMmw3NTZheA==
+https://www.instagram.com/reel/DXRRHCvjAPn/?igsh=MTRld3V2eXI1aTdhcw==
+https://www.instagram.com/reel/DXPLLRFDFbT/?igsh=andxYWx5emZid3ho
+https://www.instagram.com/reel/DXUR10CDKCr/?igsh=cnh6cTIzcnVrbDdy
+https://www.instagram.com/reel/DXRNvIojHVX/?igsh=NGV2eTkwM3R3OHd1
+https://www.instagram.com/reel/DTPU7TGEf8k/?igsh=MTN3am91MDFibDNreg==
+https://www.linkedin.com/posts/david-mamedov_%D0%B7%D0%B0%D0%B1%D0%B0%D0%B2%D0%BD%D0%BE-%D1%81%D0%B5%D0%B9%D1%87%D0%B0%D1%81-%D0%BF%D0%B5%D1%80%D0%B5%D1%81%D0%BC%D0%B0%D1%82%D1%80%D0%B8%D0%B2%D0%B0%D1%82%D1%8C-activity-7452618844638126080-8qHJ?utm_medium=ios_app&rcm=ACoAADvn7-oBSjv9I8jEuAl8lZhKnGMsctkWApo&utm_source=social_share_send&utm_campaign=share_via
+https://x.com/historigins/status/2043237687264440351?s=20
+https://youtube.com/shorts/cAxORduMYBI?si=4TvWGVAGBMNsRYgz
+https://www.instagram.com/reel/DVuuV3XgijZ/?igsh=MTExb3c5cTlnMjc3dg==
+https://www.instagram.com/stories/allingtonprimaryschool/3881900127497798588?utm_source=ig_story_item_share&igsh=ZzE1Mno0dTZ5cWlk
+https://yandex.ru/video/touch/preview/13463534538077162076
+https://m.vk.com/video-2000334695_147334695
