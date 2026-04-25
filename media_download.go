@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -76,6 +77,133 @@ func runCommandWithTimeout(timeout time.Duration, name string, args ...string) (
 	}
 
 	return result, nil
+}
+
+func runCommandStreamingStdout(timeout time.Duration, onLine func(string), name string, args ...string) (commandResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	startedAt := time.Now()
+	cmd := exec.CommandContext(ctx, name, args...)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return commandResult{elapsed: time.Since(startedAt)}, fmt.Errorf("creating stdout pipe: %w", err)
+	}
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Start(); err != nil {
+		return commandResult{elapsed: time.Since(startedAt)}, fmt.Errorf("starting command: %w", err)
+	}
+
+	var stdoutBuf bytes.Buffer
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		stdoutBuf.WriteString(line)
+		stdoutBuf.WriteByte('\n')
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+
+	waitErr := cmd.Wait()
+	result := commandResult{
+		stdout:  stdoutBuf.String(),
+		stderr:  stderrBuf.String(),
+		elapsed: time.Since(startedAt),
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return result, fmt.Errorf("command timed out after %s", timeout)
+	}
+	if waitErr != nil {
+		return result, waitErr
+	}
+	return result, nil
+}
+
+const ytdlpProgressPrefix = "ytprog|"
+const ytdlpProgressTemplate = ytdlpProgressPrefix + "%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(info.format_id)s|%(progress.fragment_index)s|%(progress.fragment_count)s"
+
+type ytdlpProgressTick struct {
+	downloaded    int64
+	total         int64
+	estimate      int64
+	formatID      string
+	fragmentIndex int64
+	fragmentCount int64
+}
+
+func parseYTDLPProgressTick(line string) (ytdlpProgressTick, bool) {
+	if !strings.HasPrefix(line, ytdlpProgressPrefix) {
+		return ytdlpProgressTick{}, false
+	}
+	parts := strings.Split(strings.TrimPrefix(line, ytdlpProgressPrefix), "|")
+	if len(parts) != 6 {
+		return ytdlpProgressTick{}, false
+	}
+	return ytdlpProgressTick{
+		downloaded:    parseYTDLPNumber(parts[0]),
+		total:         parseYTDLPNumber(parts[1]),
+		estimate:      parseYTDLPNumber(parts[2]),
+		formatID:      parts[3],
+		fragmentIndex: parseYTDLPNumber(parts[4]),
+		fragmentCount: parseYTDLPNumber(parts[5]),
+	}, true
+}
+
+func parseYTDLPNumber(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "NA" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	if f < 0 {
+		return 0
+	}
+	return int64(f)
+}
+
+type progressUpdate struct {
+	percent     int
+	streamIndex int
+}
+
+type streamAggregator struct {
+	currentFormat string
+	streamIndex   int
+}
+
+func (s *streamAggregator) update(tick ytdlpProgressTick) (progressUpdate, bool) {
+	if tick.formatID != s.currentFormat {
+		s.currentFormat = tick.formatID
+		s.streamIndex++
+	}
+
+	var pct int
+	switch {
+	case tick.fragmentCount > 0:
+		pct = int(tick.fragmentIndex * 100 / tick.fragmentCount)
+	case tick.total > 0:
+		pct = int(tick.downloaded * 100 / tick.total)
+	case tick.estimate > 0:
+		pct = int(tick.downloaded * 100 / tick.estimate)
+	default:
+		return progressUpdate{}, false
+	}
+
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100 {
+		pct = 100
+	}
+	return progressUpdate{percent: pct, streamIndex: s.streamIndex}, true
 }
 
 func envInt(name string, fallback int) int {
@@ -232,7 +360,7 @@ func (info YTDLPPreflightInfo) selectedFileSize() int64 {
 }
 
 func (media *Media) getCommandString(simplified bool) []string {
-	res := []string{"yt-dlp", "--no-playlist", "--max-filesize", maxMediaFileSize()}
+	res := []string{"yt-dlp", "--no-playlist", "--newline", "--progress-template", ytdlpProgressTemplate, "--max-filesize", maxMediaFileSize()}
 
 	if media.audioOnly {
 		res = append(res, "-x", "--audio-format", "mp3")
@@ -267,7 +395,7 @@ func (media *Media) videoFormatSelector(simplified bool) string {
 	return compatibleVideoFormatSelector
 }
 
-func (media *Media) executeDownload(simplified bool) error {
+func (media *Media) executeDownload(simplified bool, onProgress func(progressUpdate)) error {
 	commandString := media.getCommandString(simplified)
 
 	if simplified {
@@ -276,7 +404,21 @@ func (media *Media) executeDownload(simplified bool) error {
 		log.Printf("[%s]: running yt-dlp download", media.user)
 	}
 
-	result, err := runCommandWithTimeout(ytDLPTimeout(), commandString[0], commandString[1:]...)
+	agg := &streamAggregator{}
+	onLine := func(line string) {
+		if onProgress == nil {
+			return
+		}
+		tick, ok := parseYTDLPProgressTick(line)
+		if !ok {
+			return
+		}
+		if upd, ok := agg.update(tick); ok {
+			onProgress(upd)
+		}
+	}
+
+	result, err := runCommandStreamingStdout(ytDLPTimeout(), onLine, commandString[0], commandString[1:]...)
 	if err != nil {
 		log.Printf("[%s]: yt-dlp command: '%s'", media.user, strings.Join(commandString, " "))
 		log.Printf("Output: %s\n", result.stdout)

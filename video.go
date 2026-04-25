@@ -29,7 +29,7 @@ type Media struct {
 	audioOnly   bool
 }
 
-func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile string, audioOnly bool) (*Media, error) {
+func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile string, audioOnly bool, onProgress func(progressUpdate)) (*Media, error) {
 	res := &Media{
 		tmpDir:      tmpDir,
 		url:         mediaUrl,
@@ -51,12 +51,12 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 		}
 	}
 
-	err = res.executeDownload(false)
+	err = res.executeDownload(false, onProgress)
 	if err != nil {
 		log.Printf("[%s]: First download attempt failed: %s", res.user, err)
 
 		log.Printf("[%s]: Retrying with simplified arguments", res.user)
-		err = res.executeDownload(true)
+		err = res.executeDownload(true, onProgress)
 		if err != nil {
 			return nil, fmt.Errorf("both download attempts failed: %w", err)
 		}

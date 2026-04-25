@@ -83,7 +83,7 @@ func TestDownloadMediaInvalidURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := os.TempDir()
-			_, err := DownloadMedia(tt.url, "testuser", tmpDir, "", false)
+			_, err := DownloadMedia(tt.url, "testuser", tmpDir, "", false, nil)
 			if err == nil {
 				t.Error("Expected error for invalid URL")
 			}

@@ -201,6 +201,21 @@ func saveAdminChatID(username string, chatID int64) {
 	}
 }
 
+const (
+	progressBarLength      = 10
+	progressUpdateInterval = time.Second
+)
+
+func progressBar(percent int) string {
+	if percent < 0 {
+		percent = 0
+	} else if percent > 100 {
+		percent = 100
+	}
+	filled := percent * progressBarLength / 100
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", progressBarLength-filled) + fmt.Sprintf(" %d%%", percent)
+}
+
 type statusMessage struct {
 	chatID    int64
 	messageID int
@@ -434,7 +449,30 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	}
 	log.Printf("Using cookies file: %s", cookiesFile)
 
-	media, err := DownloadMedia(input, update.Message.From.Username, tmpDir, cookiesFile, audioOnly)
+	var (
+		lastUpdateAt time.Time
+		lastPercent  = -1
+		lastStream   = 0
+	)
+	onProgress := func(upd progressUpdate) {
+		streamChanged := upd.streamIndex != lastStream
+		if !streamChanged && upd.percent == lastPercent {
+			return
+		}
+		if !streamChanged && upd.percent < 100 && time.Since(lastUpdateAt) < progressUpdateInterval {
+			return
+		}
+		lastPercent = upd.percent
+		lastStream = upd.streamIndex
+		lastUpdateAt = time.Now()
+		header := fmt.Sprintf("⬇️ Downloading %s", mediaType)
+		if upd.streamIndex >= 2 {
+			header += fmt.Sprintf(" (stream %d)", upd.streamIndex)
+		}
+		status.update(ctx, b, fmt.Sprintf("%s\n%s", header, progressBar(upd.percent)))
+	}
+
+	media, err := DownloadMedia(input, update.Message.From.Username, tmpDir, cookiesFile, audioOnly, onProgress)
 	if err != nil {
 		log.Printf("Error downloading %s: %s", mediaType, err)
 		stats.AddDownloadError(update.Message.From.Username)
