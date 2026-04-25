@@ -201,6 +201,48 @@ func saveAdminChatID(username string, chatID int64) {
 	}
 }
 
+type statusMessage struct {
+	chatID    int64
+	messageID int
+}
+
+func sendStatus(ctx context.Context, b *bot.Bot, chatID int64, text string) *statusMessage {
+	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   text,
+	})
+	if err != nil {
+		log.Printf("error sending status message: %v", err)
+		return nil
+	}
+	return &statusMessage{chatID: chatID, messageID: msg.ID}
+}
+
+func (s *statusMessage) update(ctx context.Context, b *bot.Bot, text string) {
+	if s == nil {
+		return
+	}
+	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    s.chatID,
+		MessageID: s.messageID,
+		Text:      text,
+	}); err != nil {
+		log.Printf("error editing status message: %v", err)
+	}
+}
+
+func (s *statusMessage) delete(ctx context.Context, b *bot.Bot) {
+	if s == nil {
+		return
+	}
+	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+		ChatID:    s.chatID,
+		MessageID: s.messageID,
+	}); err != nil {
+		log.Printf("error deleting status message: %v", err)
+	}
+}
+
 func sendMessageToAdmin(ctx context.Context, b *bot.Bot, text string) {
 	chatID := adminChatID.Load()
 	if chatID == 0 {
@@ -384,12 +426,7 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	}
 	log.Printf("[%s]: %s url: '%s'", update.Message.From.Username, mediaType, input)
 
-	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   fmt.Sprintf("I will download the %s and send it to you shortly.", mediaType),
-	}); err != nil {
-		log.Printf("[%s]: error sending download notification: %v", update.Message.From.Username, err)
-	}
+	status := sendStatus(ctx, b, update.Message.Chat.ID, fmt.Sprintf("⬇️ Downloading %s...", mediaType))
 
 	cookiesFile := os.Getenv("COOKIES_FILE")
 	if cookiesFile == "" {
@@ -405,12 +442,7 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading %s from %s: %s",
 			update.Message.From.Username, mediaType, input, err.Error())
 
-		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   errorMsg,
-		}); err != nil {
-			log.Printf("[%s]: error sending download error message: %v", update.Message.From.Username, err)
-		}
+		status.update(ctx, b, errorMsg)
 
 		sendMessageToAdmin(ctx, b, errorMsg)
 
@@ -434,23 +466,29 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 
 	log.Printf("[%s]: media path to send: %s", update.Message.From.Username, pathToSend)
 
+	status.update(ctx, b, fmt.Sprintf("☁️ Sending %s to Telegram...", mediaType))
+
+	var sendErr error
 	if audioOnly {
-		if _, err := b.SendAudio(ctx, &bot.SendAudioParams{
+		_, sendErr = b.SendAudio(ctx, &bot.SendAudioParams{
 			ChatID: update.Message.Chat.ID,
 			Audio:  &models.InputFileString{Data: "file://" + pathToSend},
-		}); err != nil {
-			log.Printf("[%s]: error sending %s: %v", update.Message.From.Username, mediaType, err)
-		}
+		})
 	} else {
-		if _, err := b.SendVideo(ctx, &bot.SendVideoParams{
+		_, sendErr = b.SendVideo(ctx, &bot.SendVideoParams{
 			ChatID:   update.Message.Chat.ID,
 			Video:    &models.InputFileString{Data: "file://" + pathToSend},
 			Width:    media.Width,
 			Height:   media.Height,
 			Duration: (int)(media.Duration),
-		}); err != nil {
-			log.Printf("[%s]: error sending %s: %v", update.Message.From.Username, mediaType, err)
-		}
+		})
+	}
+
+	if sendErr != nil {
+		log.Printf("[%s]: error sending %s: %v", update.Message.From.Username, mediaType, sendErr)
+		status.update(ctx, b, fmt.Sprintf("❌ Failed to send %s: %v", mediaType, sendErr))
+	} else {
+		status.delete(ctx, b)
 	}
 
 	log.Printf("[%s]: %s sent", update.Message.From.Username, mediaType)
