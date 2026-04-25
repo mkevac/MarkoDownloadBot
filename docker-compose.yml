@@ -15,7 +15,7 @@ services:
       - telegram-bot-api
     environment:
       TELEGRAM_BOT_API_TOKEN: "${TELEGRAM_BOT_API_TOKEN}"
-      ADMIN_USERNAME: "${ADMIN_USERNAME}"
+      ADMIN_CHAT_ID: "${ADMIN_CHAT_ID}"
     volumes:
       - ./data:/app/data
       - ${COOKIES_FILE:-./cookies.txt}:/app/cookies.txt
