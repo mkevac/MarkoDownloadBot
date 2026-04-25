@@ -11,8 +11,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,10 +25,9 @@ import (
 )
 
 var (
-	adminUsername string
-	adminChatID   atomic.Int64
-	tmpDir        string
-	isLocal       bool
+	adminChatID int64
+	tmpDir      string
+	isLocal     bool
 )
 
 func updatePackages(ctx context.Context, b *bot.Bot) {
@@ -91,8 +90,17 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	adminUsername = os.Getenv("ADMIN_USERNAME")
-	log.Printf("Admin username: %s", adminUsername)
+	if raw := strings.TrimSpace(os.Getenv("ADMIN_CHAT_ID")); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			log.Printf("invalid ADMIN_CHAT_ID=%q: %v (admin features disabled)", raw, err)
+		} else {
+			adminChatID = id
+			log.Printf("Admin chat ID: %d", adminChatID)
+		}
+	} else {
+		log.Println("ADMIN_CHAT_ID not set — admin features disabled")
+	}
 
 	isLocal = os.Getenv("IS_LOCAL") == "true"
 
@@ -169,22 +177,35 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/broadcast", bot.MatchTypePrefix, broadcastHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/users", bot.MatchTypeExact, usersHandler)
 
-	success, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-		Commands: []models.BotCommand{
-			{Command: "start", Description: "Start the bot"},
-			{Command: "help", Description: "Show help information"},
-			{Command: "audio", Description: "Download audio"},
-			{Command: "stats", Description: "Show stats (admin only)"},
-			{Command: "users", Description: "Show user count (admin only)"},
-			{Command: "broadcast", Description: "Broadcast message (admin only)"},
-		},
-	})
-	if err != nil {
-		log.Printf("Error setting bot commands: %v", err)
-	} else if !success {
-		log.Println("SetMyCommands did not return true")
+	publicCommands := []models.BotCommand{
+		{Command: "start", Description: "Start the bot"},
+		{Command: "help", Description: "Show help information"},
+		{Command: "audio", Description: "Download audio"},
+	}
+	adminCommands := append([]models.BotCommand{}, publicCommands...)
+	adminCommands = append(adminCommands,
+		models.BotCommand{Command: "stats", Description: "Show stats"},
+		models.BotCommand{Command: "users", Description: "Show user count"},
+		models.BotCommand{Command: "broadcast", Description: "Broadcast message"},
+	)
+
+	if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+		Commands: publicCommands,
+	}); err != nil {
+		log.Printf("Error setting default bot commands: %v", err)
 	} else {
-		log.Println("Bot commands set successfully")
+		log.Println("Default bot commands set")
+	}
+
+	if adminChatID != 0 {
+		if _, err := b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+			Commands: adminCommands,
+			Scope:    &models.BotCommandScopeChat{ChatID: adminChatID},
+		}); err != nil {
+			log.Printf("Error setting admin bot commands: %v", err)
+		} else {
+			log.Println("Admin-scoped bot commands set")
+		}
 	}
 
 	go b.Start(ctx)
@@ -193,12 +214,6 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("Received interrupt signal")
-}
-
-func saveAdminChatID(username string, chatID int64) {
-	if adminUsername != "" && adminUsername == username {
-		adminChatID.Store(chatID)
-	}
 }
 
 const (
@@ -259,13 +274,12 @@ func (s *statusMessage) delete(ctx context.Context, b *bot.Bot) {
 }
 
 func sendMessageToAdmin(ctx context.Context, b *bot.Bot, text string) {
-	chatID := adminChatID.Load()
-	if chatID == 0 {
+	if adminChatID == 0 {
 		return
 	}
 
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
+		ChatID: adminChatID,
 		Text:   text,
 	}); err != nil {
 		log.Printf("Error sending message to admin: %v", err)
@@ -296,10 +310,9 @@ func cleanupAndVerifyInput(input string) (string, error) {
 func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received stats command", update.Message.From.Username)
 
-	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
-	if update.Message.From.Username != adminUsername {
+	if update.Message.Chat.ID != adminChatID {
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
@@ -411,7 +424,6 @@ func audioHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, input string, audioOnly bool) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
-	saveAdminChatID(update.Message.From.Username, update.Message.Chat.ID)
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	input, err := cleanupAndVerifyInput(input)
@@ -543,7 +555,7 @@ func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
-	if update.Message.From.Username != adminUsername {
+	if update.Message.Chat.ID != adminChatID {
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
@@ -612,7 +624,7 @@ func usersHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
-	if update.Message.From.Username != adminUsername {
+	if update.Message.Chat.ID != adminChatID {
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "You are not authorized to use this command",
