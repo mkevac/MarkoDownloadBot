@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"os"
@@ -130,7 +131,7 @@ func TestMediaAnalysisInitialization(t *testing.T) {
 	media := createTestMedia(t)
 	defer os.Remove(media.Path)
 
-	_, err := media.analyzeMedia()
+	_, err := media.analyzeMedia(context.Background())
 	if err != nil {
 		t.Logf("Analysis failed as expected without ffprobe: %v", err)
 	}
@@ -165,7 +166,7 @@ func createTestMedia(t *testing.T) *Media {
 		tmpDir:      tmpDir,
 		url:         "https://www.youtube.com/watch?v=test",
 		parsedUrl:   parsedUrl,
-		user:        "testuser",
+		logTag:      "testuser",
 		cookiesFile: "",
 		audioOnly:   false,
 	}
@@ -175,7 +176,7 @@ func TestRunFFProbe(t *testing.T) {
 	media := createTestMedia(t)
 	defer os.Remove(media.Path)
 
-	_, err := media.runFFProbe()
+	_, err := media.runFFProbe(context.Background())
 	if err != nil {
 		t.Logf("FFProbe failed as expected: %v", err)
 	}

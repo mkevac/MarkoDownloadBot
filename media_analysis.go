@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -44,8 +45,8 @@ type FFProbeStream struct {
 	} `json:"disposition"`
 }
 
-func (media *Media) runFFProbe() (*FFProbeResult, error) {
-	result, err := runCommandWithTimeout(defaultFFProbeTimeout, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", media.Path)
+func (media *Media) runFFProbe(ctx context.Context) (*FFProbeResult, error) {
+	result, err := runCommandWithTimeout(ctx, defaultFFProbeTimeout, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", media.Path)
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe failed: %w: %s", err, result.stderr)
 	}
@@ -54,12 +55,12 @@ func (media *Media) runFFProbe() (*FFProbeResult, error) {
 	if err := json.Unmarshal([]byte(result.stdout), &probeResult); err != nil {
 		return nil, fmt.Errorf("failed to parse ffprobe output: %w", err)
 	}
-	log.Printf("[%s]: ffprobe completed in %s", media.user, formatElapsed(result.elapsed))
+	log.Printf("[%s]: ffprobe completed in %s", media.logTag, formatElapsed(result.elapsed))
 
 	return &probeResult, nil
 }
 
-func (media *Media) analyzeMedia() (*MediaAnalysis, error) {
+func (media *Media) analyzeMedia(ctx context.Context) (*MediaAnalysis, error) {
 	analysis := &MediaAnalysis{
 		OriginalVideoCodec: media.VCodec,
 		OriginalAudioCodec: media.ACodec,
@@ -71,7 +72,7 @@ func (media *Media) analyzeMedia() (*MediaAnalysis, error) {
 	}
 	analysis.OriginalFileSize = fileInfo.Size()
 
-	probeResult, err := media.runFFProbe()
+	probeResult, err := media.runFFProbe(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,7 @@ func (media *Media) analyzeMedia() (*MediaAnalysis, error) {
 	}
 
 	log.Printf("[%s]: media analysis: video=%s audio=%s size=%.1fMB bitrate=%dbps",
-		media.user,
+		media.logTag,
 		analysis.OriginalVideoCodec,
 		analysis.OriginalAudioCodec,
 		bytesToMB(analysis.OriginalFileSize),

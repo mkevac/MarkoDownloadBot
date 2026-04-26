@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/mkevac/markodownloadbot/stats"
 	"golang.org/x/text/cases"
@@ -25,9 +26,10 @@ import (
 )
 
 var (
-	adminChatID int64
-	tmpDir      string
-	isLocal     bool
+	adminChatID   int64
+	tmpDir        string
+	isLocal       bool
+	downloadQueue *DownloadQueue
 )
 
 func updatePackages(ctx context.Context, b *bot.Bot) {
@@ -176,6 +178,12 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, helpHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/broadcast", bot.MatchTypePrefix, broadcastHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/users", bot.MatchTypeExact, usersHandler)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "cancel:", bot.MatchTypePrefix, cancelCallbackHandler)
+
+	messenger := &botMessenger{b: b}
+	processor := &downloadProcessor{bot: b, messenger: messenger, botCtx: ctx}
+	downloadQueue = NewDownloadQueue(ctx, messenger, processor.process)
+	go downloadQueue.Run()
 
 	publicCommands := []models.BotCommand{
 		{Command: "start", Description: "Start the bot"},
@@ -231,45 +239,60 @@ func progressBar(percent int) string {
 	return strings.Repeat("▰", filled) + strings.Repeat("▱", progressBarLength-filled) + fmt.Sprintf(" %d%%", percent)
 }
 
-type statusMessage struct {
-	chatID    int64
-	messageID int
+type botMessenger struct {
+	b *bot.Bot
 }
 
-func sendStatus(ctx context.Context, b *bot.Bot, chatID int64, text string) *statusMessage {
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   text,
-	})
-	if err != nil {
-		log.Printf("error sending status message: %v", err)
+func cancelKeyboard(id string) *models.InlineKeyboardMarkup {
+	if id == "" {
 		return nil
 	}
-	return &statusMessage{chatID: chatID, messageID: msg.ID}
-}
-
-func (s *statusMessage) update(ctx context.Context, b *bot.Bot, text string) {
-	if s == nil {
-		return
-	}
-	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    s.chatID,
-		MessageID: s.messageID,
-		Text:      text,
-	}); err != nil {
-		log.Printf("error editing status message: %v", err)
+	return &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{{
+			{Text: "❌ Cancel", CallbackData: "cancel:" + id},
+		}},
 	}
 }
 
-func (s *statusMessage) delete(ctx context.Context, b *bot.Bot) {
-	if s == nil {
+func (m *botMessenger) Send(ctx context.Context, chatID int64, text, withCancelID string) (int, error) {
+	params := &bot.SendMessageParams{ChatID: chatID, Text: text}
+	if kb := cancelKeyboard(withCancelID); kb != nil {
+		params.ReplyMarkup = kb
+	}
+	msg, err := m.b.SendMessage(ctx, params)
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
+func (m *botMessenger) Edit(ctx context.Context, chatID int64, messageID int, text, withCancelID string) error {
+	params := &bot.EditMessageTextParams{ChatID: chatID, MessageID: messageID, Text: text}
+	if kb := cancelKeyboard(withCancelID); kb != nil {
+		params.ReplyMarkup = kb
+	}
+	_, err := m.b.EditMessageText(ctx, params)
+	return err
+}
+
+func (m *botMessenger) Delete(ctx context.Context, chatID int64, messageID int) error {
+	_, err := m.b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: messageID})
+	return err
+}
+
+func cancelCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.CallbackQuery == nil || downloadQueue == nil {
 		return
 	}
-	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
-		ChatID:    s.chatID,
-		MessageID: s.messageID,
+	id := strings.TrimPrefix(update.CallbackQuery.Data, "cancel:")
+	if id == "" {
+		return
+	}
+	downloadQueue.Cancel(id)
+	if _, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
 	}); err != nil {
-		log.Printf("error deleting status message: %v", err)
+		log.Printf("error answering cancel callback: %v", err)
 	}
 }
 
@@ -445,26 +468,56 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		stats.AddVideoRequest(update.Message.From.Username)
 	}
 
-	var mediaType string
+	mediaType := "video"
 	if audioOnly {
 		mediaType = "audio"
-	} else {
-		mediaType = "video"
 	}
 	log.Printf("[%s]: %s url: '%s'", update.Message.From.Username, mediaType, input)
 
-	status := sendStatus(ctx, b, update.Message.Chat.ID, fmt.Sprintf("⬇️ Downloading %s...", mediaType))
+	entry := &DownloadEntry{
+		ID:        uuid.New().String(),
+		ChatID:    update.Message.Chat.ID,
+		URL:       input,
+		Username:  update.Message.From.Username,
+		AudioOnly: audioOnly,
+	}
+	if err := downloadQueue.Add(entry); err != nil {
+		log.Printf("[%s]: failed to enqueue: %v", entry.Username, err)
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: entry.ChatID,
+			Text:   "Sorry, couldn't queue your request. Please try again.",
+		}); err != nil {
+			log.Printf("error sending enqueue failure: %v", err)
+		}
+	}
+}
+
+type downloadProcessor struct {
+	bot       *bot.Bot
+	messenger Messenger
+	botCtx    context.Context
+}
+
+func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) {
+	mediaType := "video"
+	if e.AudioOnly {
+		mediaType = "audio"
+	}
+
+	if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("⬇️ Downloading %s...", mediaType), e.ID); err != nil {
+		log.Printf("[%s]: error setting downloading status: %v", e.LogTag(), err)
+	}
 
 	cookiesFile := os.Getenv("COOKIES_FILE")
 	if cookiesFile == "" {
 		cookiesFile = "/app/cookies.txt"
 	}
-	log.Printf("Using cookies file: %s", cookiesFile)
 
 	var (
-		lastUpdateAt time.Time
-		lastPercent  = -1
-		lastStream   = 0
+		lastUpdateAt    time.Time
+		lastPercent     = -1
+		lastStream      = 0
+		lastLoggedTenth = -1
 	)
 	onProgress := func(upd progressUpdate) {
 		streamChanged := upd.streamIndex != lastStream
@@ -477,56 +530,62 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 		lastPercent = upd.percent
 		lastStream = upd.streamIndex
 		lastUpdateAt = time.Now()
+
+		tenth := upd.percent / 10
+		if tenth != lastLoggedTenth {
+			lastLoggedTenth = tenth
+			log.Printf("[%s]: download progress %d%% (stream %d)", e.LogTag(), upd.percent, upd.streamIndex)
+		}
+
 		header := fmt.Sprintf("⬇️ Downloading %s", mediaType)
 		if upd.streamIndex >= 2 {
 			header += fmt.Sprintf(" (stream %d)", upd.streamIndex)
 		}
-		status.update(ctx, b, fmt.Sprintf("%s\n%s", header, progressBar(upd.percent)))
+		if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("%s\n%s", header, progressBar(upd.percent)), e.ID); err != nil {
+			log.Printf("[%s]: error editing progress: %v", e.LogTag(), err)
+		}
 	}
 
-	media, err := DownloadMedia(input, update.Message.From.Username, tmpDir, cookiesFile, audioOnly, onProgress)
+	media, err := DownloadMedia(entryCtx, e.URL, e.LogTag(), tmpDir, cookiesFile, e.AudioOnly, onProgress)
 	if err != nil {
-		log.Printf("Error downloading %s: %s", mediaType, err)
-		stats.AddDownloadError(update.Message.From.Username)
-
+		if entryCtx.Err() != nil {
+			_ = p.messenger.Delete(p.botCtx, e.ChatID, e.StatusMessageID())
+			return
+		}
+		log.Printf("[%s]: error downloading %s: %s", e.LogTag(), mediaType, err)
+		stats.AddDownloadError(e.Username)
 		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading %s from %s: %s",
-			update.Message.From.Username, mediaType, input, err.Error())
-
-		status.update(ctx, b, errorMsg)
-
-		sendMessageToAdmin(ctx, b, errorMsg)
-
+			e.Username, mediaType, e.URL, err.Error())
+		_ = p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), errorMsg, "")
+		sendMessageToAdmin(p.botCtx, p.bot, errorMsg)
 		return
 	}
 
-	fileSize, err := media.GetFileSize()
-	if err != nil {
-		log.Printf("Error getting file size: %s", err)
+	if fileSize, err := media.GetFileSize(); err != nil {
+		log.Printf("[%s]: error getting file size: %s", e.LogTag(), err)
 	} else {
-		log.Printf("[%s]: %s downloaded to '%s' (size: %d bytes)", update.Message.From.Username, mediaType, media.Path, fileSize)
+		log.Printf("[%s]: %s downloaded to '%s' (size: %d bytes)", e.LogTag(), mediaType, media.Path, fileSize)
 	}
 
-	// fix media path if local
-	var pathToSend string
+	pathToSend := media.Path
 	if isLocal {
 		pathToSend = filepath.Join("/app", media.Path)
-	} else {
-		pathToSend = media.Path
+	}
+	log.Printf("[%s]: media path to send: %s", e.LogTag(), pathToSend)
+
+	if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("☁️ Sending %s to Telegram...", mediaType), e.ID); err != nil {
+		log.Printf("[%s]: error setting sending status: %v", e.LogTag(), err)
 	}
 
-	log.Printf("[%s]: media path to send: %s", update.Message.From.Username, pathToSend)
-
-	status.update(ctx, b, fmt.Sprintf("☁️ Sending %s to Telegram...", mediaType))
-
 	var sendErr error
-	if audioOnly {
-		_, sendErr = b.SendAudio(ctx, &bot.SendAudioParams{
-			ChatID: update.Message.Chat.ID,
+	if e.AudioOnly {
+		_, sendErr = p.bot.SendAudio(entryCtx, &bot.SendAudioParams{
+			ChatID: e.ChatID,
 			Audio:  &models.InputFileString{Data: "file://" + pathToSend},
 		})
 	} else {
-		_, sendErr = b.SendVideo(ctx, &bot.SendVideoParams{
-			ChatID:   update.Message.Chat.ID,
+		_, sendErr = p.bot.SendVideo(entryCtx, &bot.SendVideoParams{
+			ChatID:   e.ChatID,
 			Video:    &models.InputFileString{Data: "file://" + pathToSend},
 			Width:    media.Width,
 			Height:   media.Height,
@@ -535,19 +594,21 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	}
 
 	if sendErr != nil {
-		log.Printf("[%s]: error sending %s: %v", update.Message.From.Username, mediaType, sendErr)
-		status.update(ctx, b, fmt.Sprintf("❌ Failed to send %s: %v", mediaType, sendErr))
+		if entryCtx.Err() != nil {
+			_ = p.messenger.Delete(p.botCtx, e.ChatID, e.StatusMessageID())
+		} else {
+			log.Printf("[%s]: error sending %s: %v", e.LogTag(), mediaType, sendErr)
+			_ = p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("❌ Failed to send %s: %v", mediaType, sendErr), "")
+		}
 	} else {
-		status.delete(ctx, b)
+		_ = p.messenger.Delete(p.botCtx, e.ChatID, e.StatusMessageID())
+		log.Printf("[%s]: %s sent", e.LogTag(), mediaType)
 	}
-
-	log.Printf("[%s]: %s sent", update.Message.From.Username, mediaType)
 
 	if err := media.Delete(); err != nil {
-		log.Printf("Error removing %s file: %s", mediaType, err)
+		log.Printf("[%s]: error removing %s file: %s", e.LogTag(), mediaType, err)
 	}
-
-	log.Printf("[%s]: %s removed", update.Message.From.Username, mediaType)
+	log.Printf("[%s]: %s removed", e.LogTag(), mediaType)
 }
 
 func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {

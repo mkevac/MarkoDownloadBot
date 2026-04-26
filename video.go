@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -24,17 +25,17 @@ type Media struct {
 	tmpDir      string
 	url         string
 	parsedUrl   *url.URL
-	user        string
+	logTag      string
 	cookiesFile string
 	audioOnly   bool
 }
 
-func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile string, audioOnly bool, onProgress func(progressUpdate)) (*Media, error) {
+func DownloadMedia(ctx context.Context, mediaUrl string, logTag string, tmpDir string, cookiesFile string, audioOnly bool, onProgress func(progressUpdate)) (*Media, error) {
 	res := &Media{
 		tmpDir:      tmpDir,
 		url:         mediaUrl,
 		randomName:  uuid.New().String(),
-		user:        user,
+		logTag:      logTag,
 		cookiesFile: cookiesFile,
 		audioOnly:   audioOnly,
 	}
@@ -46,18 +47,24 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 	res.parsedUrl = u
 
 	if !audioOnly {
-		if err := res.checkMediaBeforeDownload(); err != nil {
+		if err := res.checkMediaBeforeDownload(ctx); err != nil {
 			return nil, err
 		}
 	}
 
-	err = res.executeDownload(false, onProgress)
+	err = res.executeDownload(ctx, false, onProgress)
 	if err != nil {
-		log.Printf("[%s]: First download attempt failed: %s", res.user, err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		log.Printf("[%s]: First download attempt failed: %s", res.logTag, err)
 
-		log.Printf("[%s]: Retrying with simplified arguments", res.user)
-		err = res.executeDownload(true, onProgress)
+		log.Printf("[%s]: Retrying with simplified arguments", res.logTag)
+		err = res.executeDownload(ctx, true, onProgress)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, fmt.Errorf("both download attempts failed: %w", err)
 		}
 	}
@@ -82,25 +89,25 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 	}
 
 	if err := res.renameToReadableName(); err != nil {
-		log.Printf("[%s]: warning - could not rename to readable name: %s, keeping UUID name", res.user, err)
+		log.Printf("[%s]: warning - could not rename to readable name: %s, keeping UUID name", res.logTag, err)
 	}
 
 	if audioOnly {
-		log.Printf("[%s]: audio format '%s'", res.user, res.ACodec)
+		log.Printf("[%s]: audio format '%s'", res.logTag, res.ACodec)
 		return res, nil
 	}
 
-	log.Printf("[%s]: video format '%s'", res.user, res.VCodec)
+	log.Printf("[%s]: video format '%s'", res.logTag, res.VCodec)
 
-	analysis, err := res.analyzeMedia()
+	analysis, err := res.analyzeMedia(ctx)
 	if err != nil {
-		log.Printf("[%s]: warning - could not analyze media: %s, skipping conversion", res.user, err)
+		log.Printf("[%s]: warning - could not analyze media: %s, skipping conversion", res.logTag, err)
 		return res, nil
 	}
 
 	res.determineConversionStrategy(analysis)
 	if analysis.IsAlreadyCompatible {
-		log.Printf("[%s]: media is already iPhone compatible, no conversion needed", res.user)
+		log.Printf("[%s]: media is already iPhone compatible, no conversion needed", res.logTag)
 		return res, nil
 	}
 
@@ -108,8 +115,8 @@ func DownloadMedia(mediaUrl string, user string, tmpDir string, cookiesFile stri
 	if analysis.NeedsVideoConversion {
 		videoAction = "h264"
 	}
-	log.Printf("[%s]: media needs conversion - video: %s, audio: %s", res.user, videoAction, analysis.AudioConversionType)
-	if err := res.convertIntelligent(analysis); err != nil {
+	log.Printf("[%s]: media needs conversion - video: %s, audio: %s", res.logTag, videoAction, analysis.AudioConversionType)
+	if err := res.convertIntelligent(ctx, analysis); err != nil {
 		return nil, fmt.Errorf("error converting video: %w", err)
 	}
 

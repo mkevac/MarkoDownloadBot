@@ -113,7 +113,7 @@ func (media *Media) renameToReadableName() error {
 	media.Path = newPath
 	media.FileName = newFileName
 
-	log.Printf("[%s]: renamed file from '%s' to '%s'", media.user, filepath.Base(oldPath), newFileName)
+	log.Printf("[%s]: renamed file from '%s' to '%s'", media.logTag, filepath.Base(oldPath), newFileName)
 
 	return nil
 }

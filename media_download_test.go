@@ -1,10 +1,58 @@
 package main
 
 import (
+	"context"
 	"net/url"
 	"os"
 	"testing"
+	"time"
 )
+
+func TestRunCommandStreamingStdoutCancelPropagates(t *testing.T) {
+	if _, err := os.Stat("/bin/sleep"); err != nil {
+		t.Skip("/bin/sleep not available")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := runCommandStreamingStdout(ctx, time.Minute, nil, "/bin/sleep", "10")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected error from canceled command, got nil (elapsed %s)", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected fast cancel (<2s), took %s — ctx not propagating", elapsed)
+	}
+}
+
+func TestRunCommandWithTimeoutCancelPropagates(t *testing.T) {
+	if _, err := os.Stat("/bin/sleep"); err != nil {
+		t.Skip("/bin/sleep not available")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := runCommandWithTimeout(ctx, time.Minute, "/bin/sleep", "10")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected error from canceled command, got nil (elapsed %s)", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected fast cancel (<2s), took %s — ctx not propagating", elapsed)
+	}
+}
 
 func TestMediaGetCommandString(t *testing.T) {
 	tmpDir := "/tmp/test"

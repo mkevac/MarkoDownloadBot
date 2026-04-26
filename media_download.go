@@ -51,8 +51,8 @@ type commandResult struct {
 	elapsed time.Duration
 }
 
-func runCommandWithTimeout(timeout time.Duration, name string, args ...string) (commandResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func runCommandWithTimeout(parentCtx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	startedAt := time.Now()
@@ -79,8 +79,8 @@ func runCommandWithTimeout(timeout time.Duration, name string, args ...string) (
 	return result, nil
 }
 
-func runCommandStreamingStdout(timeout time.Duration, onLine func(string), name string, args ...string) (commandResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func runCommandStreamingStdout(parentCtx context.Context, timeout time.Duration, onLine func(string), name string, args ...string) (commandResult, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	startedAt := time.Now()
@@ -153,6 +153,21 @@ func parseYTDLPProgressTick(line string) (ytdlpProgressTick, bool) {
 		fragmentIndex: parseYTDLPNumber(parts[4]),
 		fragmentCount: parseYTDLPNumber(parts[5]),
 	}, true
+}
+
+func stripProgressLines(s string) string {
+	if !strings.Contains(s, ytdlpProgressPrefix) {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(line, ytdlpProgressPrefix) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func parseYTDLPNumber(s string) int64 {
@@ -242,26 +257,30 @@ func ffmpegTimeout() time.Duration {
 	return envDuration("FFMPEG_TIMEOUT_SECONDS", defaultFFmpegTimeout)
 }
 
-func (media *Media) checkMediaBeforeDownload() error {
+func (media *Media) checkMediaBeforeDownload(ctx context.Context) error {
 	commandString := media.getPreflightCommandString()
-	log.Printf("[%s]: running yt-dlp preflight", media.user)
+	log.Printf("[%s]: running yt-dlp preflight", media.logTag)
 
-	result, err := runCommandWithTimeout(ytDLPTimeout(), commandString[0], commandString[1:]...)
+	result, err := runCommandWithTimeout(ctx, ytDLPTimeout(), commandString[0], commandString[1:]...)
 	if err != nil {
-		log.Printf("[%s]: preflight command: '%s'", media.user, strings.Join(commandString, " "))
+		if ctx.Err() != nil {
+			log.Printf("[%s]: preflight canceled after %s", media.logTag, formatElapsed(result.elapsed))
+			return ctx.Err()
+		}
+		log.Printf("[%s]: preflight command: '%s'", media.logTag, strings.Join(commandString, " "))
 		log.Printf("Preflight Output: %s\n", result.stdout)
 		log.Printf("Preflight Error: %s\n", result.stderr)
-		log.Printf("[%s]: preflight failed after %s", media.user, formatElapsed(result.elapsed))
+		log.Printf("[%s]: preflight failed after %s", media.logTag, formatElapsed(result.elapsed))
 		return fmt.Errorf("media preflight failed: %w", err)
 	}
-	log.Printf("[%s]: preflight completed in %s", media.user, formatElapsed(result.elapsed))
+	log.Printf("[%s]: preflight completed in %s", media.logTag, formatElapsed(result.elapsed))
 
 	var info YTDLPPreflightInfo
 	if err := json.Unmarshal([]byte(result.stdout), &info); err != nil {
 		return fmt.Errorf("media preflight returned invalid JSON: %w", err)
 	}
 
-	log.Printf("[%s]: selected format: %s", media.user, info.selectedFormatSummary())
+	log.Printf("[%s]: selected format: %s", media.logTag, info.selectedFormatSummary())
 
 	if selectedSize := info.selectedFileSize(); selectedSize > 0 {
 		if err := checkMediaSizeLimit(selectedSize, "selected media"); err != nil {
@@ -395,13 +414,13 @@ func (media *Media) videoFormatSelector(simplified bool) string {
 	return compatibleVideoFormatSelector
 }
 
-func (media *Media) executeDownload(simplified bool, onProgress func(progressUpdate)) error {
+func (media *Media) executeDownload(ctx context.Context, simplified bool, onProgress func(progressUpdate)) error {
 	commandString := media.getCommandString(simplified)
 
 	if simplified {
-		log.Printf("[%s]: running yt-dlp download with simplified selector", media.user)
+		log.Printf("[%s]: running yt-dlp download with simplified selector", media.logTag)
 	} else {
-		log.Printf("[%s]: running yt-dlp download", media.user)
+		log.Printf("[%s]: running yt-dlp download", media.logTag)
 	}
 
 	agg := &streamAggregator{}
@@ -418,16 +437,20 @@ func (media *Media) executeDownload(simplified bool, onProgress func(progressUpd
 		}
 	}
 
-	result, err := runCommandStreamingStdout(ytDLPTimeout(), onLine, commandString[0], commandString[1:]...)
+	result, err := runCommandStreamingStdout(ctx, ytDLPTimeout(), onLine, commandString[0], commandString[1:]...)
 	if err != nil {
-		log.Printf("[%s]: yt-dlp command: '%s'", media.user, strings.Join(commandString, " "))
-		log.Printf("Output: %s\n", result.stdout)
+		if ctx.Err() != nil {
+			log.Printf("[%s]: yt-dlp download canceled after %s", media.logTag, formatElapsed(result.elapsed))
+			return ctx.Err()
+		}
+		log.Printf("[%s]: yt-dlp command: '%s'", media.logTag, strings.Join(commandString, " "))
+		log.Printf("Output: %s\n", stripProgressLines(result.stdout))
 		log.Printf("Error: %s\n", result.stderr)
-		log.Printf("[%s]: yt-dlp download failed after %s", media.user, formatElapsed(result.elapsed))
+		log.Printf("[%s]: yt-dlp download failed after %s", media.logTag, formatElapsed(result.elapsed))
 		return fmt.Errorf("command execution failed with %w", err)
 	}
 
-	log.Printf("[%s]: yt-dlp download completed in %s", media.user, formatElapsed(result.elapsed))
+	log.Printf("[%s]: yt-dlp download completed in %s", media.logTag, formatElapsed(result.elapsed))
 	return nil
 }
 
@@ -457,7 +480,7 @@ func (media *Media) enforceDownloadedFileSizeLimit() error {
 		return err
 	}
 
-	log.Printf("[%s]: downloaded media size accepted: %.1fMB <= %s", media.user, bytesToMB(info.Size()), maxMediaFileSize())
+	log.Printf("[%s]: downloaded media size accepted: %.1fMB <= %s", media.logTag, bytesToMB(info.Size()), maxMediaFileSize())
 	return nil
 }
 
@@ -478,13 +501,13 @@ func checkMediaSizeLimit(size int64, label string) error {
 func (media *Media) deleteDownloadedFiles() {
 	matches, err := filepath.Glob(filepath.Join(media.tmpDir, media.randomName+".*"))
 	if err != nil {
-		log.Printf("[%s]: error locating files for cleanup: %s", media.user, err)
+		log.Printf("[%s]: error locating files for cleanup: %s", media.logTag, err)
 		return
 	}
 
 	for _, match := range matches {
 		if err := os.Remove(match); err != nil && !os.IsNotExist(err) {
-			log.Printf("[%s]: error removing oversized download artifact %s: %s", media.user, match, err)
+			log.Printf("[%s]: error removing oversized download artifact %s: %s", media.logTag, match, err)
 		}
 	}
 }
