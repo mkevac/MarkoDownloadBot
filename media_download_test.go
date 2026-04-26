@@ -8,6 +8,72 @@ import (
 	"time"
 )
 
+func TestFirstYTDLPJSONLine(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty",
+			in:   "",
+			want: "",
+		},
+		{
+			name: "single json",
+			in:   `{"id":"abc"}`,
+			want: `{"id":"abc"}`,
+		},
+		{
+			name: "json with leading spaces and trailing newline",
+			in:   "  {\"id\":\"abc\"}\n",
+			want: `{"id":"abc"}`,
+		},
+		{
+			name: "carousel: first json then error lines",
+			in: `{"id":"vid1","playlist_index":1}
+ERROR: [Instagram] DWeu: No video formats found!
+ERROR: [Instagram] DWeu: No video formats found!`,
+			want: `{"id":"vid1","playlist_index":1}`,
+		},
+		{
+			name: "errors first then json (defensive)",
+			in: `ERROR: something
+{"id":"vid1"}`,
+			want: `{"id":"vid1"}`,
+		},
+		{
+			name: "no json, only errors",
+			in:   "ERROR: foo\nERROR: bar\n",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := firstYTDLPJSONLine(tt.in)
+			if got != tt.want {
+				t.Errorf("firstYTDLPJSONLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsCarouselSite(t *testing.T) {
+	cases := map[string]bool{
+		"instagram.com":     true,
+		"www.instagram.com": true,
+		"youtube.com":       false,
+		"www.youtube.com":   false,
+		"tiktok.com":        false,
+		"":                  false,
+	}
+	for host, want := range cases {
+		if got := isCarouselSite(host); got != want {
+			t.Errorf("isCarouselSite(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
 func TestRunCommandStreamingStdoutCancelPropagates(t *testing.T) {
 	if _, err := os.Stat("/bin/sleep"); err != nil {
 		t.Skip("/bin/sleep not available")
@@ -114,6 +180,14 @@ func TestMediaGetCommandString(t *testing.T) {
 			expectedParams: []string{"yt-dlp", "--no-playlist", "--max-filesize", defaultMaxMediaFileSize, "--merge-output-format", "mp4", "-f", compatibleVideoFormatSelector},
 			notExpected:    []string{"--recode-video", "-S", "-x"},
 		},
+		{
+			name:           "Instagram post (carousel) — no --no-playlist",
+			url:            "https://www.instagram.com/p/DWeuKatiKmT/",
+			audioOnly:      false,
+			simplified:     false,
+			expectedParams: []string{"yt-dlp", "--max-filesize", defaultMaxMediaFileSize, "--merge-output-format", "mp4"},
+			notExpected:    []string{"--no-playlist", "--playlist-items"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -145,6 +219,27 @@ func TestMediaGetCommandString(t *testing.T) {
 			assertContainsParam(t, result, tt.url)
 		})
 	}
+}
+
+func TestMediaGetCommandStringInstagramPlaylistItems(t *testing.T) {
+	parsedUrl, err := url.Parse("https://www.instagram.com/p/DWeuKatiKmT/")
+	if err != nil {
+		t.Fatalf("Failed to parse URL: %v", err)
+	}
+
+	media := &Media{
+		tmpDir:        "/tmp/test",
+		url:           "https://www.instagram.com/p/DWeuKatiKmT/",
+		parsedUrl:     parsedUrl,
+		randomName:    "test-uuid",
+		playlistIndex: 3,
+	}
+
+	result := media.getCommandString(false)
+
+	assertContainsParam(t, result, "--playlist-items")
+	assertContainsParam(t, result, "3")
+	assertNotContainsParam(t, result, "--no-playlist")
 }
 
 func TestMediaGetCommandStringSingleFormatSelector(t *testing.T) {

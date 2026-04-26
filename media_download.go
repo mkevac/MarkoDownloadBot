@@ -42,6 +42,7 @@ type YTDLPPreflightInfo struct {
 	Height           int                  `json:"height"`
 	FileSize         int64                `json:"filesize"`
 	FileSizeApprox   int64                `json:"filesize_approx"`
+	PlaylistIndex    int                  `json:"playlist_index"`
 	RequestedFormats []YTDLPPreflightInfo `json:"requested_formats"`
 }
 
@@ -155,6 +156,24 @@ func parseYTDLPProgressTick(line string) (ytdlpProgressTick, bool) {
 	}, true
 }
 
+// firstYTDLPJSONLine returns the first non-empty line of stdout that starts
+// with '{' — i.e. the first JSON object yt-dlp emitted. Useful when --dump-json
+// produces multiple lines (one per playlist/carousel item) and we only want
+// the first item's metadata.
+func firstYTDLPJSONLine(stdout string) string {
+	for _, line := range strings.Split(stdout, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "{") {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func isCarouselSite(host string) bool {
+	return strings.Contains(host, "instagram.com")
+}
+
 func stripProgressLines(s string) string {
 	if !strings.Contains(s, ytdlpProgressPrefix) {
 		return s
@@ -262,7 +281,14 @@ func (media *Media) checkMediaBeforeDownload(ctx context.Context) error {
 	log.Printf("[%s]: running yt-dlp preflight", media.logTag)
 
 	result, err := runCommandWithTimeout(ctx, ytDLPTimeout(), commandString[0], commandString[1:]...)
-	if err != nil {
+
+	// For carousel sites we expect partial-success: yt-dlp may emit one or more
+	// JSON lines for video items and ERROR lines for photo items, exiting non-zero
+	// even though it found a video. So check for parseable JSON before treating
+	// the non-zero exit as failure.
+	jsonLine := firstYTDLPJSONLine(result.stdout)
+
+	if err != nil && jsonLine == "" {
 		if ctx.Err() != nil {
 			log.Printf("[%s]: preflight canceled after %s", media.logTag, formatElapsed(result.elapsed))
 			return ctx.Err()
@@ -275,9 +301,18 @@ func (media *Media) checkMediaBeforeDownload(ctx context.Context) error {
 	}
 	log.Printf("[%s]: preflight completed in %s", media.logTag, formatElapsed(result.elapsed))
 
+	if jsonLine == "" {
+		return fmt.Errorf("media preflight returned no JSON output")
+	}
+
 	var info YTDLPPreflightInfo
-	if err := json.Unmarshal([]byte(result.stdout), &info); err != nil {
+	if err := json.Unmarshal([]byte(jsonLine), &info); err != nil {
 		return fmt.Errorf("media preflight returned invalid JSON: %w", err)
+	}
+
+	if info.PlaylistIndex > 0 {
+		media.playlistIndex = info.PlaylistIndex
+		log.Printf("[%s]: carousel item picked: index=%d", media.logTag, info.PlaylistIndex)
 	}
 
 	log.Printf("[%s]: selected format: %s", media.logTag, info.selectedFormatSummary())
@@ -295,9 +330,11 @@ func (media *Media) getPreflightCommandString() []string {
 	res := []string{
 		"yt-dlp",
 		"--no-warnings",
-		"--no-playlist",
 		"--dump-json",
 		"--skip-download",
+	}
+	if !isCarouselSite(media.parsedUrl.Host) {
+		res = append(res, "--no-playlist")
 	}
 
 	if !media.audioOnly {
@@ -379,7 +416,14 @@ func (info YTDLPPreflightInfo) selectedFileSize() int64 {
 }
 
 func (media *Media) getCommandString(simplified bool) []string {
-	res := []string{"yt-dlp", "--no-playlist", "--newline", "--progress-template", ytdlpProgressTemplate, "--max-filesize", maxMediaFileSize()}
+	res := []string{"yt-dlp", "--newline", "--progress-template", ytdlpProgressTemplate, "--max-filesize", maxMediaFileSize()}
+	if isCarouselSite(media.parsedUrl.Host) {
+		if media.playlistIndex > 0 {
+			res = append(res, "--playlist-items", strconv.Itoa(media.playlistIndex))
+		}
+	} else {
+		res = append(res, "--no-playlist")
+	}
 
 	if media.audioOnly {
 		res = append(res, "-x", "--audio-format", "mp3")

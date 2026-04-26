@@ -21,13 +21,14 @@ type Media struct {
 	FileName string
 	Title    string `json:"title"`
 
-	randomName  string
-	tmpDir      string
-	url         string
-	parsedUrl   *url.URL
-	logTag      string
-	cookiesFile string
-	audioOnly   bool
+	randomName    string
+	tmpDir        string
+	url           string
+	parsedUrl     *url.URL
+	logTag        string
+	cookiesFile   string
+	audioOnly     bool
+	playlistIndex int // 0 means single item; >0 means carousel item index for --playlist-items
 }
 
 func DownloadMedia(ctx context.Context, mediaUrl string, logTag string, tmpDir string, cookiesFile string, audioOnly bool, onProgress func(progressUpdate)) (*Media, error) {
