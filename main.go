@@ -49,21 +49,23 @@ func updatePackages(ctx context.Context, b *bot.Bot) {
 	}
 	log.Printf("Package index updated: %s", strings.TrimSpace(string(output)))
 
-	cmd = exec.CommandContext(ctx, "apk", "upgrade", "yt-dlp")
-	output, err = cmd.CombinedOutput()
-	outputStr := strings.TrimSpace(string(output))
+	for _, pkg := range []string{"yt-dlp", "gallery-dl"} {
+		cmd = exec.CommandContext(ctx, "apk", "upgrade", pkg)
+		output, err = cmd.CombinedOutput()
+		outputStr := strings.TrimSpace(string(output))
 
-	if err != nil {
-		log.Printf("Error upgrading yt-dlp: %v", err)
-		sendMessageToAdmin(ctx, b, fmt.Sprintf("❌ yt-dlp upgrade failed: %v", err))
-		return
-	}
+		if err != nil {
+			log.Printf("Error upgrading %s: %v", pkg, err)
+			sendMessageToAdmin(ctx, b, fmt.Sprintf("❌ %s upgrade failed: %v", pkg, err))
+			continue
+		}
 
-	if strings.Contains(outputStr, "Upgrading") || strings.Contains(outputStr, "Installing") {
-		log.Printf("yt-dlp updated: %s", outputStr)
-		sendMessageToAdmin(ctx, b, fmt.Sprintf("✅ yt-dlp updated successfully:\n%s", outputStr))
-	} else {
-		log.Printf("yt-dlp already up to date: %s", outputStr)
+		if strings.Contains(outputStr, "Upgrading") || strings.Contains(outputStr, "Installing") {
+			log.Printf("%s updated: %s", pkg, outputStr)
+			sendMessageToAdmin(ctx, b, fmt.Sprintf("✅ %s updated successfully:\n%s", pkg, outputStr))
+		} else {
+			log.Printf("%s already up to date: %s", pkg, outputStr)
+		}
 	}
 }
 
@@ -499,6 +501,17 @@ type downloadProcessor struct {
 }
 
 func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) {
+	cookiesFile := os.Getenv("COOKIES_FILE")
+	if cookiesFile == "" {
+		cookiesFile = "/app/cookies.txt"
+	}
+
+	parsedURL, err := url.Parse(e.URL)
+	if err == nil && !e.AudioOnly && isInstagramCarouselURL(parsedURL) {
+		p.processCarousel(entryCtx, e, cookiesFile)
+		return
+	}
+
 	mediaType := "video"
 	if e.AudioOnly {
 		mediaType = "audio"
@@ -506,11 +519,6 @@ func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) 
 
 	if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("⬇️ Downloading %s...", mediaType), e.ID); err != nil {
 		log.Printf("[%s]: error setting downloading status: %v", e.LogTag(), err)
-	}
-
-	cookiesFile := os.Getenv("COOKIES_FILE")
-	if cookiesFile == "" {
-		cookiesFile = "/app/cookies.txt"
 	}
 
 	var (
@@ -609,6 +617,72 @@ func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) 
 		log.Printf("[%s]: error removing %s file: %s", e.LogTag(), mediaType, err)
 	}
 	log.Printf("[%s]: %s removed", e.LogTag(), mediaType)
+}
+
+func (p *downloadProcessor) processCarousel(entryCtx context.Context, e *DownloadEntry, cookiesFile string) {
+	if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), "⬇️ Downloading carousel...", e.ID); err != nil {
+		log.Printf("[%s]: error setting carousel downloading status: %v", e.LogTag(), err)
+	}
+
+	carousel, err := DownloadCarousel(entryCtx, e.URL, e.LogTag(), tmpDir, cookiesFile)
+	if err != nil {
+		if entryCtx.Err() != nil {
+			_ = p.messenger.Delete(p.botCtx, e.ChatID, e.StatusMessageID())
+			return
+		}
+		log.Printf("[%s]: error downloading carousel: %s", e.LogTag(), err)
+		stats.AddDownloadError(e.Username)
+		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading carousel from %s: %s",
+			e.Username, e.URL, err.Error())
+		_ = p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), errorMsg, "")
+		sendMessageToAdmin(p.botCtx, p.bot, errorMsg)
+		return
+	}
+	defer carousel.Cleanup()
+
+	chunks := chunkCarousel(carousel.Items, telegramMediaGroupMax)
+	totalItems := len(carousel.Items)
+	log.Printf("[%s]: carousel ready: %d items in %d group(s)", e.LogTag(), totalItems, len(chunks))
+
+	if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("☁️ Sending %d items to Telegram...", totalItems), e.ID); err != nil {
+		log.Printf("[%s]: error setting carousel sending status: %v", e.LogTag(), err)
+	}
+
+	for i, chunk := range chunks {
+		group := make([]models.InputMedia, 0, len(chunk))
+		for _, item := range chunk {
+			path := item.Path
+			if isLocal {
+				path = filepath.Join("/app", path)
+			}
+			ref := "file://" + path
+			if item.IsVideo {
+				group = append(group, &models.InputMediaVideo{
+					Media:             ref,
+					SupportsStreaming: true,
+				})
+			} else {
+				group = append(group, &models.InputMediaPhoto{Media: ref})
+			}
+		}
+
+		log.Printf("[%s]: sending media group %d/%d (%d items)", e.LogTag(), i+1, len(chunks), len(chunk))
+		if _, err := p.bot.SendMediaGroup(entryCtx, &bot.SendMediaGroupParams{
+			ChatID: e.ChatID,
+			Media:  group,
+		}); err != nil {
+			if entryCtx.Err() != nil {
+				_ = p.messenger.Delete(p.botCtx, e.ChatID, e.StatusMessageID())
+				return
+			}
+			log.Printf("[%s]: error sending media group %d: %v", e.LogTag(), i+1, err)
+			_ = p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), fmt.Sprintf("❌ Failed to send carousel: %v", err), "")
+			return
+		}
+	}
+
+	_ = p.messenger.Delete(p.botCtx, e.ChatID, e.StatusMessageID())
+	log.Printf("[%s]: carousel sent (%d items)", e.LogTag(), totalItems)
 }
 
 func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {

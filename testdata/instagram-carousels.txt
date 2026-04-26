@@ -1,0 +1,7 @@
+# Instagram carousel test URLs. Each post mixes videos and/or photos.
+# Used to verify the gallery-dl-based carousel pipeline.
+#
+# Format: <url> <expected_total> <expected_videos> <expected_photos>
+
+# 1 video + 19 photos (samuelcole90, "On the money. e38 bippu stance")
+https://www.instagram.com/p/DWeuKatiKmT/ 20 1 19
