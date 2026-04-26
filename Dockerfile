@@ -15,7 +15,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /app/markodownlo
 # Stage 2: Create the final image
 FROM alpine:latest
 
-RUN apk add --no-cache yt-dlp
+RUN apk add --no-cache yt-dlp py3-pip \
+ && pip3 install --break-system-packages --no-cache-dir "curl_cffi>=0.10,<0.15"
 
 # Set the working directory and HOME environment variable
 WORKDIR /app
