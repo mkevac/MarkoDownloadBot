@@ -184,6 +184,30 @@ func main() {
 
 	messenger := &botMessenger{b: b}
 	processor := &downloadProcessor{bot: b, messenger: messenger, botCtx: ctx}
+
+	stagingChat := adminChatID
+	if raw := strings.TrimSpace(os.Getenv("GUEST_STAGING_CHAT_ID")); raw != "" {
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			stagingChat = id
+		} else {
+			log.Printf("invalid GUEST_STAGING_CHAT_ID=%q: %v", raw, err)
+		}
+	}
+	if stagingChat != 0 {
+		fileRef := func(path string) string {
+			ref := path
+			if isLocal {
+				ref = filepath.Join("/app", path)
+			}
+			return "file://" + ref
+		}
+		processor.guestResponder = newHTTPGuestResponder(b, stagingChat, serverURL, os.Getenv("TELEGRAM_BOT_API_TOKEN"), fileRef)
+		currentGuestResponder = processor.guestResponder
+		log.Printf("guest mode responder ready (staging chat %d)", stagingChat)
+	} else {
+		log.Println("no staging chat configured (set ADMIN_CHAT_ID or GUEST_STAGING_CHAT_ID); guest replies will be dropped if they arrive")
+	}
+
 	downloadQueue = NewDownloadQueue(ctx, messenger, processor.process)
 	go downloadQueue.Run()
 
@@ -218,7 +242,8 @@ func main() {
 		}
 	}
 
-	go b.Start(ctx)
+	poller := newGuestPoller(b, serverURL, os.Getenv("TELEGRAM_BOT_API_TOKEN"), handleGuestMessage)
+	go poller.Run(ctx)
 
 	go startUpdateScheduler(ctx, b)
 
@@ -495,15 +520,21 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 }
 
 type downloadProcessor struct {
-	bot       *bot.Bot
-	messenger Messenger
-	botCtx    context.Context
+	bot            *bot.Bot
+	messenger      Messenger
+	botCtx         context.Context
+	guestResponder GuestResponder
 }
 
 func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) {
 	cookiesFile := os.Getenv("COOKIES_FILE")
 	if cookiesFile == "" {
 		cookiesFile = "/app/cookies.txt"
+	}
+
+	if e.Silent() {
+		p.processGuest(entryCtx, e, cookiesFile)
+		return
 	}
 
 	parsedURL, err := url.Parse(e.URL)
@@ -618,6 +649,124 @@ func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) 
 	}
 	log.Printf("[%s]: %s removed", e.LogTag(), mediaType)
 }
+
+func (p *downloadProcessor) processGuest(entryCtx context.Context, e *DownloadEntry, cookiesFile string) {
+	if p.guestResponder == nil {
+		log.Printf("[%s]: guest entry but no responder configured; dropping", e.LogTag())
+		return
+	}
+
+	mediaType := "video"
+	if e.AudioOnly {
+		mediaType = "audio"
+	}
+	log.Printf("[%s]: guest download starting (%s) for query %s", e.LogTag(), mediaType, e.GuestQueryID)
+
+	media, err := DownloadMedia(entryCtx, e.URL, e.LogTag(), tmpDir, cookiesFile, e.AudioOnly, nil)
+	if err != nil {
+		if entryCtx.Err() != nil {
+			return
+		}
+		log.Printf("[%s]: guest download failed: %v", e.LogTag(), err)
+		stats.AddDownloadError(e.Username)
+		errMsg := fmt.Sprintf("Sorry — couldn't download %s. %s", mediaType, err.Error())
+		if respErr := p.guestResponder.RespondError(p.botCtx, e.GuestQueryID, e.ResultID, errMsg); respErr != nil {
+			log.Printf("[%s]: failed to send guest error reply: %v", e.LogTag(), respErr)
+		}
+		sendMessageToAdmin(p.botCtx, p.bot, fmt.Sprintf("Guest download error for @%s: %v", e.Username, err))
+		return
+	}
+	defer func() {
+		if err := media.Delete(); err != nil {
+			log.Printf("[%s]: error deleting guest media file: %v", e.LogTag(), err)
+		}
+	}()
+
+	if err := p.guestResponder.RespondMedia(p.botCtx, e.GuestQueryID, e.ResultID, media.Path, e.AudioOnly, media.Title); err != nil {
+		if entryCtx.Err() != nil {
+			return
+		}
+		log.Printf("[%s]: error replying to guest query: %v", e.LogTag(), err)
+		sendMessageToAdmin(p.botCtx, p.bot, fmt.Sprintf("Guest reply failed for @%s: %v", e.Username, err))
+		return
+	}
+	log.Printf("[%s]: guest reply sent", e.LogTag())
+}
+
+func handleGuestMessage(ctx context.Context, gm *guestMessage) {
+	if gm == nil || downloadQueue == nil {
+		return
+	}
+	if gm.From == nil {
+		log.Printf("guest: dropping message %d with no from", gm.MessageID)
+		return
+	}
+
+	username := gm.From.Username
+	log.Printf("[guest %s]: received guest message: %q", username, gm.Text)
+
+	// Track the user under their personal chat (user_id) so future DMs link up.
+	stats.RegisterUser(gm.From.ID, gm.From.Username, gm.From.FirstName, gm.From.LastName)
+
+	text := strings.TrimSpace(gm.Text)
+	audioOnly := false
+	if strings.HasPrefix(strings.ToLower(text), "/audio") {
+		audioOnly = true
+		text = strings.TrimSpace(strings.TrimPrefix(text, "/audio"))
+		text = strings.TrimSpace(strings.TrimPrefix(text, "/Audio"))
+	}
+
+	rawURL := extractGuestURL(text)
+	if rawURL == "" {
+		log.Printf("[guest %s]: no URL found in text", username)
+		stats.AddUnrecognizedCommand(username)
+		if guestResponder := getGuestResponder(); guestResponder != nil {
+			if err := guestResponder.RespondError(ctx, gm.GuestQueryID, uuid.New().String(),
+				"Please mention me with a video or audio URL."); err != nil {
+				log.Printf("guest: error sending no-URL reply: %v", err)
+			}
+		}
+		return
+	}
+
+	cleanURL, err := cleanupAndVerifyInput(rawURL)
+	if err != nil {
+		log.Printf("[guest %s]: invalid URL %q: %v", username, rawURL, err)
+		stats.AddUnrecognizedCommand(username)
+		if guestResponder := getGuestResponder(); guestResponder != nil {
+			if err := guestResponder.RespondError(ctx, gm.GuestQueryID, uuid.New().String(),
+				"That doesn't look like a valid URL."); err != nil {
+				log.Printf("guest: error sending invalid-URL reply: %v", err)
+			}
+		}
+		return
+	}
+
+	if audioOnly {
+		stats.AddAudioRequest(username)
+	} else {
+		stats.AddVideoRequest(username)
+	}
+
+	entry := &DownloadEntry{
+		ID:           uuid.New().String(),
+		ChatID:       gm.From.ID,
+		URL:          cleanURL,
+		Username:     username,
+		AudioOnly:    audioOnly,
+		GuestQueryID: gm.GuestQueryID,
+		ResultID:     uuid.New().String(),
+	}
+	if err := downloadQueue.Add(entry); err != nil {
+		log.Printf("[guest %s]: failed to enqueue: %v", username, err)
+	}
+}
+
+// getGuestResponder returns the currently-configured responder. Set by main()
+// when guest mode is enabled. nil otherwise (callers must check).
+var currentGuestResponder GuestResponder
+
+func getGuestResponder() GuestResponder { return currentGuestResponder }
 
 func (p *downloadProcessor) processCarousel(entryCtx context.Context, e *DownloadEntry, cookiesFile string) {
 	if err := p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), "⬇️ Downloading carousel...", e.ID); err != nil {

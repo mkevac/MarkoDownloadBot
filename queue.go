@@ -23,11 +23,20 @@ type DownloadEntry struct {
 	Username  string
 	AudioOnly bool
 
+	// Guest mode fields. When GuestQueryID is set, the entry is silent:
+	// the queue skips status messages and the processor uses the guest
+	// reply path (sendVideo to staging chat → file_id → answerGuestQuery)
+	// instead of sending directly to ChatID.
+	GuestQueryID string
+	ResultID     string
+
 	statusMessageID int
 	ctx             context.Context
 	cancel          context.CancelFunc
 	canceled        bool
 }
+
+func (e *DownloadEntry) Silent() bool { return e.GuestQueryID != "" }
 
 func (e *DownloadEntry) Ctx() context.Context { return e.ctx }
 func (e *DownloadEntry) StatusMessageID() int { return e.statusMessageID }
@@ -71,17 +80,19 @@ func (q *DownloadQueue) Add(e *DownloadEntry) error {
 	posSnapshot := len(q.entries)
 	q.mu.Unlock()
 
-	text := statusStarting
-	if posSnapshot > 0 {
-		text = queuedAtText(posSnapshot)
-	}
+	if !e.Silent() {
+		text := statusStarting
+		if posSnapshot > 0 {
+			text = queuedAtText(posSnapshot)
+		}
 
-	msgID, err := q.messenger.Send(q.parentCtx, e.ChatID, text, e.ID)
-	if err != nil {
-		e.cancel()
-		return fmt.Errorf("sending status message: %w", err)
+		msgID, err := q.messenger.Send(q.parentCtx, e.ChatID, text, e.ID)
+		if err != nil {
+			e.cancel()
+			return fmt.Errorf("sending status message: %w", err)
+		}
+		e.statusMessageID = msgID
 	}
-	e.statusMessageID = msgID
 
 	q.mu.Lock()
 	q.entries = append(q.entries, e)
