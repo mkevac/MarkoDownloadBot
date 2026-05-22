@@ -66,11 +66,24 @@ func extractGuestURL(text string) string {
 	return ""
 }
 
+// GuestMedia is the payload uploaded to the staging chat to mint a cached
+// file_id. Width/Height/Duration must be passed on the staging send so
+// Telegram associates correct aspect ratio and duration with the file_id —
+// otherwise InlineQueryResultCachedVideo renders as a black square with
+// 00:00 duration.
+type GuestMedia struct {
+	Path     string
+	Title    string
+	Width    int
+	Height   int
+	Duration int
+}
+
 // GuestResponder sends a reply to a guest_message. Implementations upload the
 // downloaded media to obtain a Telegram file_id and then call answerGuestQuery
 // with an InlineQueryResultCached* referencing that file_id.
 type GuestResponder interface {
-	RespondMedia(ctx context.Context, queryID, resultID, mediaPath string, audioOnly bool, title string) error
+	RespondMedia(ctx context.Context, queryID, resultID string, audioOnly bool, media GuestMedia) error
 	RespondError(ctx context.Context, queryID, resultID, message string) error
 }
 
@@ -97,8 +110,8 @@ func newHTTPGuestResponder(b *bot.Bot, stagingChat int64, apiURL, botToken strin
 	}
 }
 
-func (r *httpGuestResponder) RespondMedia(ctx context.Context, queryID, resultID, mediaPath string, audioOnly bool, title string) error {
-	fileID, stagingMsgID, err := r.uploadStaging(ctx, mediaPath, audioOnly)
+func (r *httpGuestResponder) RespondMedia(ctx context.Context, queryID, resultID string, audioOnly bool, media GuestMedia) error {
+	fileID, stagingMsgID, err := r.uploadStaging(ctx, media, audioOnly)
 	if err != nil {
 		return fmt.Errorf("staging upload: %w", err)
 	}
@@ -112,7 +125,7 @@ func (r *httpGuestResponder) RespondMedia(ctx context.Context, queryID, resultID
 		}
 	}()
 
-	result, err := buildCachedResult(resultID, fileID, audioOnly, title)
+	result, err := buildCachedResult(resultID, fileID, audioOnly, media.Title)
 	if err != nil {
 		return fmt.Errorf("build cached result: %w", err)
 	}
@@ -135,17 +148,14 @@ func (r *httpGuestResponder) RespondError(ctx context.Context, queryID, resultID
 	return r.answerGuestQuery(ctx, queryID, payload)
 }
 
-func (r *httpGuestResponder) uploadStaging(ctx context.Context, mediaPath string, audioOnly bool) (fileID string, messageID int, err error) {
-	ref := mediaPath
+func (r *httpGuestResponder) uploadStaging(ctx context.Context, media GuestMedia, audioOnly bool) (fileID string, messageID int, err error) {
+	ref := media.Path
 	if r.makeFileRef != nil {
-		ref = r.makeFileRef(mediaPath)
+		ref = r.makeFileRef(media.Path)
 	}
 
 	if audioOnly {
-		msg, err := r.bot.SendAudio(ctx, &bot.SendAudioParams{
-			ChatID: r.stagingChat,
-			Audio:  &models.InputFileString{Data: ref},
-		})
+		msg, err := r.bot.SendAudio(ctx, stagingAudioParams(r.stagingChat, ref, media))
 		if err != nil {
 			return "", 0, err
 		}
@@ -155,10 +165,7 @@ func (r *httpGuestResponder) uploadStaging(ctx context.Context, mediaPath string
 		return msg.Audio.FileID, msg.ID, nil
 	}
 
-	msg, err := r.bot.SendVideo(ctx, &bot.SendVideoParams{
-		ChatID: r.stagingChat,
-		Video:  &models.InputFileString{Data: ref},
-	})
+	msg, err := r.bot.SendVideo(ctx, stagingVideoParams(r.stagingChat, ref, media))
 	if err != nil {
 		return "", 0, err
 	}
@@ -166,6 +173,30 @@ func (r *httpGuestResponder) uploadStaging(ctx context.Context, mediaPath string
 		return "", msg.ID, errors.New("staging upload returned no video metadata")
 	}
 	return msg.Video.FileID, msg.ID, nil
+}
+
+// stagingVideoParams builds the SendVideo payload for the staging upload. The
+// Width/Height/Duration fields are critical: without them Telegram caches the
+// file_id with 0 duration and unknown aspect ratio, so the cached inline
+// result renders as a black square with "00:00" duration.
+func stagingVideoParams(chatID int64, ref string, media GuestMedia) *bot.SendVideoParams {
+	return &bot.SendVideoParams{
+		ChatID:            chatID,
+		Video:             &models.InputFileString{Data: ref},
+		Width:             media.Width,
+		Height:            media.Height,
+		Duration:          media.Duration,
+		SupportsStreaming: true,
+	}
+}
+
+func stagingAudioParams(chatID int64, ref string, media GuestMedia) *bot.SendAudioParams {
+	return &bot.SendAudioParams{
+		ChatID:   chatID,
+		Audio:    &models.InputFileString{Data: ref},
+		Duration: media.Duration,
+		Title:    media.Title,
+	}
 }
 
 func buildCachedResult(resultID, fileID string, audioOnly bool, title string) (json.RawMessage, error) {

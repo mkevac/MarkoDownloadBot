@@ -38,6 +38,55 @@ func TestExtractGuestURL(t *testing.T) {
 	}
 }
 
+func TestStagingVideoParamsPropagatesMetadata(t *testing.T) {
+	media := GuestMedia{
+		Path:     "/tmp/clip.mp4",
+		Title:    "ignored on staging",
+		Width:    1080,
+		Height:   1920,
+		Duration: 14,
+	}
+
+	params := stagingVideoParams(-100, "file:///app/clip.mp4", media)
+
+	if params.Width != 1080 || params.Height != 1920 {
+		t.Errorf("dimensions = %dx%d, want 1080x1920", params.Width, params.Height)
+	}
+	if params.Duration != 14 {
+		t.Errorf("duration = %d, want 14", params.Duration)
+	}
+	if !params.SupportsStreaming {
+		t.Error("SupportsStreaming should be true so Telegram doesn't have to demux")
+	}
+	if params.ChatID != int64(-100) {
+		t.Errorf("ChatID = %v, want -100", params.ChatID)
+	}
+	ref, ok := params.Video.(*models.InputFileString)
+	if !ok {
+		t.Fatalf("Video is not InputFileString: %T", params.Video)
+	}
+	if ref.Data != "file:///app/clip.mp4" {
+		t.Errorf("Video ref = %q, want file:///app/clip.mp4", ref.Data)
+	}
+}
+
+func TestStagingAudioParamsPropagatesMetadata(t *testing.T) {
+	media := GuestMedia{
+		Path:     "/tmp/song.mp3",
+		Title:    "Track 1",
+		Duration: 230,
+	}
+
+	params := stagingAudioParams(-100, "file:///app/song.mp3", media)
+
+	if params.Duration != 230 {
+		t.Errorf("duration = %d, want 230", params.Duration)
+	}
+	if params.Title != "Track 1" {
+		t.Errorf("title = %q, want Track 1", params.Title)
+	}
+}
+
 func TestBuildCachedResultVideo(t *testing.T) {
 	raw, err := buildCachedResult("result-1", "file-abc", false, "My Video")
 	if err != nil {
@@ -263,9 +312,10 @@ type fakeGuestResponder struct {
 	mediaErr  error
 	errorErr  error
 	mediaCall struct {
-		queryID, resultID, path, title string
-		audioOnly                      bool
-		called                         bool
+		queryID, resultID string
+		media             GuestMedia
+		audioOnly         bool
+		called            bool
 	}
 	errorCall struct {
 		queryID, resultID, message string
@@ -273,13 +323,12 @@ type fakeGuestResponder struct {
 	}
 }
 
-func (f *fakeGuestResponder) RespondMedia(_ context.Context, queryID, resultID, path string, audioOnly bool, title string) error {
+func (f *fakeGuestResponder) RespondMedia(_ context.Context, queryID, resultID string, audioOnly bool, media GuestMedia) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.mediaCall.queryID = queryID
 	f.mediaCall.resultID = resultID
-	f.mediaCall.path = path
-	f.mediaCall.title = title
+	f.mediaCall.media = media
 	f.mediaCall.audioOnly = audioOnly
 	f.mediaCall.called = true
 	return f.mediaErr

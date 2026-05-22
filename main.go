@@ -682,7 +682,13 @@ func (p *downloadProcessor) processGuest(entryCtx context.Context, e *DownloadEn
 		}
 	}()
 
-	if err := p.guestResponder.RespondMedia(p.botCtx, e.GuestQueryID, e.ResultID, media.Path, e.AudioOnly, media.Title); err != nil {
+	if err := p.guestResponder.RespondMedia(p.botCtx, e.GuestQueryID, e.ResultID, e.AudioOnly, GuestMedia{
+		Path:     media.Path,
+		Title:    media.Title,
+		Width:    media.Width,
+		Height:   media.Height,
+		Duration: int(media.Duration),
+	}); err != nil {
 		if entryCtx.Err() != nil {
 			return
 		}
