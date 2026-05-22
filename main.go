@@ -718,14 +718,10 @@ func handleGuestMessage(ctx context.Context, gm *guestMessage) {
 
 	rawURL := extractGuestURL(text)
 	if rawURL == "" {
-		log.Printf("[guest %s]: no URL found in text", username)
-		stats.AddUnrecognizedCommand(username)
-		if guestResponder := getGuestResponder(); guestResponder != nil {
-			if err := guestResponder.RespondError(ctx, gm.GuestQueryID, uuid.New().String(),
-				"Please mention me with a video or audio URL."); err != nil {
-				log.Printf("guest: error sending no-URL reply: %v", err)
-			}
-		}
+		// Telegram delivers guest_message for both @-mentions and replies to
+		// the bot's own messages. Stay silent when there's no URL at all so
+		// we don't spam chats every time someone replies to a video we sent.
+		log.Printf("[guest %s]: no URL found in text, staying silent", username)
 		return
 	}
 

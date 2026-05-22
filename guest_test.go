@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/go-telegram/bot/models"
+	"github.com/mkevac/markodownloadbot/stats"
 )
 
 func TestExtractGuestURL(t *testing.T) {
@@ -296,3 +297,68 @@ func (f *fakeGuestResponder) RespondError(_ context.Context, queryID, resultID, 
 
 // Ensure the fake satisfies the interface at compile time.
 var _ GuestResponder = (*fakeGuestResponder)(nil)
+
+// withGuestTestEnv swaps in a non-nil downloadQueue and a fake responder for
+// the duration of the test. handleGuestMessage gates on both being set, and
+// the queue isn't actually exercised on the silent path.
+func withGuestTestEnv(t *testing.T) *fakeGuestResponder {
+	t.Helper()
+	stats.Init(t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	prevQueue := downloadQueue
+	downloadQueue = NewDownloadQueue(ctx, newFakeMessenger(), func(context.Context, *DownloadEntry) {})
+	t.Cleanup(func() { downloadQueue = prevQueue })
+
+	fake := &fakeGuestResponder{}
+	prevResponder := currentGuestResponder
+	currentGuestResponder = fake
+	t.Cleanup(func() { currentGuestResponder = prevResponder })
+
+	return fake
+}
+
+func TestHandleGuestMessage_NoURLStaysSilent(t *testing.T) {
+	fake := withGuestTestEnv(t)
+
+	gm := &guestMessage{
+		MessageID:    7,
+		GuestQueryID: "Q-no-url",
+		Text:         "какая у нас похожая лента, Марко 😂",
+		From:         &guestUser{ID: 42, Username: "nikita", FirstName: "Nikita"},
+	}
+
+	handleGuestMessage(context.Background(), gm)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.errorCall.called {
+		t.Errorf("RespondError was called for a no-URL guest message (msg=%q); want silent",
+			fake.errorCall.message)
+	}
+	if fake.mediaCall.called {
+		t.Errorf("RespondMedia was called for a no-URL guest message; want silent")
+	}
+}
+
+func TestHandleGuestMessage_OnlyMentionStaysSilent(t *testing.T) {
+	fake := withGuestTestEnv(t)
+
+	gm := &guestMessage{
+		MessageID:    8,
+		GuestQueryID: "Q-only-mention",
+		Text:         "@MarkoDownloadBot",
+		From:         &guestUser{ID: 43, Username: "someone"},
+	}
+
+	handleGuestMessage(context.Background(), gm)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.errorCall.called {
+		t.Errorf("RespondError was called for a mention-only guest message (msg=%q); want silent",
+			fake.errorCall.message)
+	}
+}
