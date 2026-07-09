@@ -40,33 +40,43 @@ func updatePackages(ctx context.Context, b *bot.Bot) {
 
 	log.Println("Checking for package updates...")
 
-	cmd := exec.CommandContext(ctx, "apk", "update")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Error updating package index: %v", err)
-		sendMessageToAdmin(ctx, b, fmt.Sprintf("❌ Package index update failed: %v", err))
-		return
-	}
-	log.Printf("Package index updated: %s", strings.TrimSpace(string(output)))
-
+	// yt-dlp and gallery-dl move fast — site extractors (Instagram, YouTube, …)
+	// break and get fixed upstream within days. The Alpine apk packages lag real
+	// releases by months, so upgrade straight from PyPI via pip (the apk install
+	// in the Dockerfile stays only to pull ffmpeg + yt-dlp-ejs and as a baseline).
 	for _, pkg := range []string{"yt-dlp", "gallery-dl"} {
-		cmd = exec.CommandContext(ctx, "apk", "upgrade", pkg)
-		output, err = cmd.CombinedOutput()
+		cmd := exec.CommandContext(ctx, "pip3", "install",
+			"--break-system-packages", "--no-cache-dir", "--upgrade", pkg)
+		output, err := cmd.CombinedOutput()
 		outputStr := strings.TrimSpace(string(output))
 
 		if err != nil {
-			log.Printf("Error upgrading %s: %v", pkg, err)
+			log.Printf("Error upgrading %s: %v\n%s", pkg, err, outputStr)
 			sendMessageToAdmin(ctx, b, fmt.Sprintf("❌ %s upgrade failed: %v", pkg, err))
 			continue
 		}
 
-		if strings.Contains(outputStr, "Upgrading") || strings.Contains(outputStr, "Installing") {
-			log.Printf("%s updated: %s", pkg, outputStr)
-			sendMessageToAdmin(ctx, b, fmt.Sprintf("✅ %s updated successfully:\n%s", pkg, outputStr))
+		// pip prints a "Successfully installed <pkg>-<version>" line only when it
+		// actually changed something; otherwise the requirement was already met.
+		if line, ok := successfullyInstalledLine(outputStr); ok {
+			log.Printf("%s updated: %s", pkg, line)
+			sendMessageToAdmin(ctx, b, fmt.Sprintf("✅ %s updated: %s", pkg, line))
 		} else {
-			log.Printf("%s already up to date: %s", pkg, outputStr)
+			log.Printf("%s already up to date", pkg)
 		}
 	}
+}
+
+// successfullyInstalledLine extracts pip's "Successfully installed ..." summary
+// line from combined output, returning ok=false when no upgrade happened.
+func successfullyInstalledLine(output string) (string, bool) {
+	for _, l := range strings.Split(output, "\n") {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "Successfully installed") {
+			return l, true
+		}
+	}
+	return "", false
 }
 
 func startUpdateScheduler(ctx context.Context, b *bot.Bot) {
