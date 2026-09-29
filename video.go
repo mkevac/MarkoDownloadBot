@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 
 	"github.com/google/uuid"
 )
@@ -21,14 +21,16 @@ type Media struct {
 	FileName string
 	Title    string `json:"title"`
 
-	randomName    string
-	tmpDir        string
-	url           string
-	parsedUrl     *url.URL
-	logTag        string
-	cookiesFile   string
-	audioOnly     bool
-	playlistIndex int // 0 means single item; >0 means carousel item index for --playlist-items
+	randomName           string
+	tmpDir               string
+	url                  string
+	parsedUrl            *url.URL
+	logTag               string
+	cookiesFile          string
+	audioOnly            bool
+	selectedMaxDimension int
+	reducedMaxDimension  int
+	playlistIndex        int // 0 means single item; >0 means carousel item index for --playlist-items
 }
 
 func DownloadMedia(ctx context.Context, mediaUrl string, logTag string, tmpDir string, cookiesFile string, audioOnly bool, onProgress func(progressUpdate)) (*Media, error) {
@@ -47,41 +49,7 @@ func DownloadMedia(ctx context.Context, mediaUrl string, logTag string, tmpDir s
 	}
 	res.parsedUrl = u
 
-	if !audioOnly {
-		if err := res.checkMediaBeforeDownload(ctx); err != nil {
-			return nil, err
-		}
-	}
-
-	err = res.executeDownload(ctx, false, onProgress)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		log.Printf("[%s]: First download attempt failed: %s", res.logTag, err)
-
-		log.Printf("[%s]: Retrying with simplified arguments", res.logTag)
-		err = res.executeDownload(ctx, true, onProgress)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, fmt.Errorf("both download attempts failed: %w", err)
-		}
-	}
-
-	res.Path, err = res.findDownloadedMediaPath()
-	if err != nil {
-		if audioOnly {
-			res.Path = filepath.Join(tmpDir, res.randomName+".mp3")
-		} else {
-			res.Path = filepath.Join(tmpDir, res.randomName+".mp4")
-		}
-		return nil, err
-	}
-
-	if err := res.enforceDownloadedFileSizeLimit(); err != nil {
-		res.deleteDownloadedFiles()
+	if err := res.downloadWithSizeRetry(ctx, onProgress); err != nil {
 		return nil, err
 	}
 
@@ -122,6 +90,67 @@ func DownloadMedia(ctx context.Context, mediaUrl string, logTag string, tmpDir s
 	}
 
 	return res, nil
+}
+
+// downloadWithSizeRetry permits exactly one resolution reduction for oversized videos.
+func (media *Media) downloadWithSizeRetry(ctx context.Context, onProgress func(progressUpdate)) error {
+	for {
+		err := media.downloadAttempt(ctx, onProgress)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !errors.Is(err, errMediaTooLarge) {
+			return err
+		}
+		media.deleteDownloadedFiles()
+		if !media.reduceResolution() {
+			return err
+		}
+		log.Printf("[%s]: media exceeds %s; retrying with both dimensions <= %d", media.logTag, maxMediaFileSize(), media.reducedMaxDimension)
+	}
+}
+
+func (media *Media) reduceResolution() bool {
+	if media.audioOnly || media.reducedMaxDimension > 0 || media.selectedMaxDimension <= 0 {
+		return false
+	}
+	for _, dimension := range []int{1920, 1280, 854, 640, 426, 256} {
+		if dimension < media.selectedMaxDimension {
+			media.reducedMaxDimension = dimension
+			return true
+		}
+	}
+	return false
+}
+
+func (media *Media) downloadAttempt(ctx context.Context, onProgress func(progressUpdate)) error {
+	if !media.audioOnly {
+		if err := media.checkMediaBeforeDownload(ctx); err != nil {
+			return err
+		}
+	}
+	err := media.executeDownload(ctx, false, onProgress)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, errMediaTooLarge) || media.reducedMaxDimension > 0 {
+			return err
+		}
+		log.Printf("[%s]: First download attempt failed: %s; retrying with simplified arguments", media.logTag, err)
+		err = media.executeDownload(ctx, true, onProgress)
+		if err != nil {
+			return fmt.Errorf("both download attempts failed: %w", err)
+		}
+	}
+	media.Path, err = media.findDownloadedMediaPath()
+	if err != nil {
+		return err
+	}
+	return media.enforceDownloadedFileSizeLimit()
 }
 
 func (media *Media) Delete() error {

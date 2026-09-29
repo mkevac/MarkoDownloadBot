@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	defaultMaxMediaFileSize = "250M"
+	defaultMaxMediaFileSize = "350M"
 	defaultYTDLPTimeout     = 15 * time.Minute
 	defaultFFProbeTimeout   = 30 * time.Second
 	defaultFFmpegTimeout    = 5 * time.Minute
@@ -276,6 +277,8 @@ func ffmpegTimeout() time.Duration {
 	return envDuration("FFMPEG_TIMEOUT_SECONDS", defaultFFmpegTimeout)
 }
 
+var errMediaTooLarge = errors.New("media exceeds size limit")
+
 func (media *Media) checkMediaBeforeDownload(ctx context.Context) error {
 	commandString := media.getPreflightCommandString()
 	log.Printf("[%s]: running yt-dlp preflight", media.logTag)
@@ -316,6 +319,10 @@ func (media *Media) checkMediaBeforeDownload(ctx context.Context) error {
 	}
 
 	log.Printf("[%s]: selected format: %s", media.logTag, info.selectedFormatSummary())
+	media.selectedMaxDimension = max(info.Width, info.Height)
+	for _, format := range info.RequestedFormats {
+		media.selectedMaxDimension = max(media.selectedMaxDimension, max(format.Width, format.Height))
+	}
 
 	if selectedSize := info.selectedFileSize(); selectedSize > 0 {
 		if err := checkMediaSizeLimit(selectedSize, "selected media"); err != nil {
@@ -447,6 +454,13 @@ func (media *Media) getCommandString(simplified bool) []string {
 }
 
 func (media *Media) videoFormatSelector(simplified bool) string {
+	if media.reducedMaxDimension > 0 {
+		// Every alternative has the cap, including the generic fallback.
+		cap := fmt.Sprintf("[width<=%d][height<=%d]", media.reducedMaxDimension, media.reducedMaxDimension)
+		return "b[vcodec^=avc1][acodec^=mp4a][ext=mp4]" + cap + "/" +
+			"bv[vcodec^=avc1][ext=mp4]" + cap + "+ba[acodec^=mp4a][ext=m4a]/" +
+			"best[ext=mp4]" + cap + "/best" + cap
+	}
 	if simplified {
 		return "best[ext=mp4]/best"
 	}
@@ -482,6 +496,9 @@ func (media *Media) executeDownload(ctx context.Context, simplified bool, onProg
 	}
 
 	result, err := runCommandStreamingStdout(ctx, ytDLPTimeout(), onLine, commandString[0], commandString[1:]...)
+	if ctx.Err() == nil && strings.Contains(strings.ToLower(result.stdout+result.stderr), "larger than max-filesize") {
+		return fmt.Errorf("%w: yt-dlp stopped at %s", errMediaTooLarge, maxMediaFileSize())
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			log.Printf("[%s]: yt-dlp download canceled after %s", media.logTag, formatElapsed(result.elapsed))
@@ -536,7 +553,7 @@ func checkMediaSizeLimit(size int64, label string) error {
 	}
 
 	if size > maxSize {
-		return fmt.Errorf("%s size %.1fMB exceeds limit %.1fMB", label, bytesToMB(size), bytesToMB(maxSize))
+		return fmt.Errorf("%w: %s size %.1fMB exceeds limit %.1fMB", errMediaTooLarge, label, bytesToMB(size), bytesToMB(maxSize))
 	}
 
 	return nil

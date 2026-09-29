@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"testing"
@@ -443,5 +444,101 @@ func assertNotContainsParam(t *testing.T, params []string, unexpected string) {
 		if param == unexpected {
 			t.Errorf("Unexpected parameter %s found in result: %v", unexpected, params)
 		}
+	}
+}
+
+func TestDownloadWithSizeRetry(t *testing.T) {
+	for _, scenario := range []string{"preflight", "actual", "ytdlp", "still-large", "normal"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("MAX_MEDIA_FILESIZE", "5B")
+			t.Setenv("SCENARIO", scenario)
+			t.Setenv("CALLS", dir+"/calls")
+			t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+			script := `#!/bin/sh
+preflight=no
+reduced=no
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+ --dump-json) preflight=yes ;;
+ -f) shift; case "$1" in *'width<=854'*) reduced=yes ;; esac ;;
+ -o) shift; output="$1" ;;
+ esac
+ shift
+done
+printf '%s %s\n' "$preflight" "$reduced" >> "$CALLS"
+if [ "$preflight" = yes ]; then
+ size=4
+ if [ "$SCENARIO" = still-large ] || { [ "$SCENARIO" = preflight ] && [ "$reduced" = no ]; }; then size=6; fi
+ printf '{"width":1280,"height":720,"filesize":%s}\n' "$size"
+ exit 0
+fi
+if [ "$SCENARIO" = ytdlp ] && [ "$reduced" = no ]; then
+ echo '[download] File is larger than max-filesize (6 bytes > 5 bytes). Aborting.'
+ exit 0
+fi
+output="${output%.*}.mp4"
+if [ "$SCENARIO" = actual ] && [ "$reduced" = no ]; then
+ printf 123456 > "$output"
+else
+ printf 1234 > "$output"
+fi
+`
+			if err := os.WriteFile(dir+"/yt-dlp", []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			u, _ := url.Parse("https://youtube.com/watch?v=test")
+			media := &Media{url: u.String(), parsedUrl: u, tmpDir: dir, randomName: "video"}
+			err := media.downloadWithSizeRetry(context.Background(), nil)
+			if scenario == "still-large" {
+				if !errors.Is(err, errMediaTooLarge) {
+					t.Fatalf("expected size error, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			calls, err := os.ReadFile(dir + "/calls")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "yes no\nno no\nyes yes\nno yes\n"
+			switch scenario {
+			case "preflight":
+				want = "yes no\nyes yes\nno yes\n"
+			case "still-large":
+				want = "yes no\nyes yes\n"
+			case "normal":
+				want = "yes no\nno no\n"
+			}
+			if string(calls) != want {
+				t.Fatalf("calls = %q, want %q", calls, want)
+			}
+			if scenario != "still-large" {
+				data, err := os.ReadFile(media.Path)
+				if err != nil || string(data) != "1234" {
+					t.Fatalf("download = %q, err %v", data, err)
+				}
+			}
+		})
+	}
+}
+
+func TestResolutionReduction(t *testing.T) {
+	for _, dims := range [][2]int{{1280, 854}, {1920, 1280}, {854, 640}, {640, 426}, {0, 0}, {256, 0}} {
+		media := &Media{selectedMaxDimension: dims[0]}
+		got := media.reduceResolution()
+		if got != (dims[1] > 0) || media.reducedMaxDimension != dims[1] {
+			t.Fatalf("%v: reduced %v to %d", dims, got, media.reducedMaxDimension)
+		}
+		if media.reduceResolution() {
+			t.Fatal("reduced twice")
+		}
+		if got && media.videoFormatSelector(false) != media.videoFormatSelector(true) {
+			t.Fatal("simplified fallback bypasses cap")
+		}
+	}
+	media := &Media{audioOnly: true, selectedMaxDimension: 1280}
+	if media.reduceResolution() {
+		t.Fatal("reduced audio")
 	}
 }
