@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ type MediaAnalysis struct {
 // FFProbeResult represents the JSON output from ffprobe.
 type FFProbeResult struct {
 	Format struct {
+		Duration   string `json:"duration"`
 		BitRate    string `json:"bit_rate"`
 		FormatName string `json:"format_name"`
 	} `json:"format"`
@@ -33,6 +35,10 @@ type FFProbeResult struct {
 
 // FFProbeStream represents a single stream from ffprobe output.
 type FFProbeStream struct {
+	Duration     string `json:"duration"`
+	SideDataList []struct {
+		Rotation float64 `json:"rotation"`
+	} `json:"side_data_list"`
 	Index       int    `json:"index"`
 	CodecType   string `json:"codec_type"`
 	CodecName   string `json:"codec_name"`
@@ -83,6 +89,8 @@ func (media *Media) analyzeMedia(ctx context.Context) (*MediaAnalysis, error) {
 		}
 	}
 
+	media.updateVideoMetadata(probeResult)
+
 	bestVideoStream := selectBestVideoStream(probeResult.Streams)
 	if bestVideoStream != nil {
 		analysis.OriginalVideoCodec = bestVideoStream.CodecName
@@ -102,6 +110,32 @@ func (media *Media) analyzeMedia(ctx context.Context) (*MediaAnalysis, error) {
 	)
 
 	return analysis, nil
+}
+
+// Use the file's metadata for Telegram: extractors can omit dimensions and duration.
+func (media *Media) updateVideoMetadata(probe *FFProbeResult) {
+	stream := selectBestVideoStream(probe.Streams)
+	if stream == nil {
+		return
+	}
+	if stream.Width > 0 && stream.Height > 0 {
+		media.Width, media.Height = stream.Width, stream.Height
+		for _, data := range stream.SideDataList {
+			rotation := math.Mod(math.Abs(data.Rotation), 180)
+			if math.Abs(rotation-90) < 0.01 {
+				media.Width, media.Height = media.Height, media.Width
+				break
+			}
+		}
+	}
+	for _, raw := range []string{stream.Duration, probe.Format.Duration} {
+		seconds, err := strconv.ParseFloat(raw, 64)
+		if err == nil && seconds > 0 && !math.IsNaN(seconds) && !math.IsInf(seconds, 0) && seconds < float64(1<<31-1) {
+			media.Duration = CustomDuration(math.Ceil(seconds))
+			break
+		}
+	}
+	log.Printf("[%s]: Telegram video metadata: %dx%d duration=%ds", media.logTag, media.Width, media.Height, media.Duration)
 }
 
 func (media *Media) determineConversionStrategy(analysis *MediaAnalysis) {

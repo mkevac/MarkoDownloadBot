@@ -380,3 +380,55 @@ func BenchmarkNeedsVideoConversion(b *testing.B) {
 		media.needsVideoConversion("av01")
 	}
 }
+
+func TestAnalyzeMediaFillsMissingInstagramMetadata(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	script := `#!/bin/sh
+printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":720,"height":1280,"duration":"69.726"},{"codec_type":"audio","codec_name":"aac"}],"format":{"duration":"69.8"}}'
+`
+	if err := os.WriteFile(filepath.Join(dir, "ffprobe"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "reel.mp4")
+	if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	media := &Media{Path: path}
+	analysis, err := media.analyzeMedia(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	media.determineConversionStrategy(analysis)
+	if !analysis.IsAlreadyCompatible {
+		t.Fatal("H.264/AAC reel should not need conversion")
+	}
+	if media.Width != 720 || media.Height != 1280 || media.Duration != 70 {
+		t.Fatalf("Telegram metadata = %dx%d, %ds", media.Width, media.Height, media.Duration)
+	}
+}
+
+func TestUpdateVideoMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, data              string
+		width, height, duration int
+	}{
+		{"rotation", `{"streams":[{"codec_type":"video","width":1920,"height":1080,"side_data_list":[{"rotation":-90}],"duration":"10"}]}`, 1080, 1920, 10},
+		{"container duration", `{"streams":[{"codec_type":"video","width":720,"height":1280,"duration":"N/A"}],"format":{"duration":"12.4"}}`, 720, 1280, 13},
+		{"preserve on missing", `{"streams":[{"codec_type":"video"}]}`, 640, 360, 30},
+		{"invalid duration", `{"streams":[{"codec_type":"video","duration":"NaN"}],"format":{"duration":"-5"}}`, 640, 360, 30},
+		{"converted dimensions", `{"streams":[{"codec_type":"video","width":1280,"height":720,"duration":"30"}]}`, 1280, 720, 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			media := &Media{Width: 640, Height: 360, Duration: 30}
+			var probe FFProbeResult
+			if err := json.Unmarshal([]byte(tc.data), &probe); err != nil {
+				t.Fatal(err)
+			}
+			media.updateVideoMetadata(&probe)
+			if media.Width != tc.width || media.Height != tc.height || int(media.Duration) != tc.duration {
+				t.Fatalf("got %dx%d %ds", media.Width, media.Height, media.Duration)
+			}
+		})
+	}
+}

@@ -88,6 +88,12 @@ func DownloadMedia(ctx context.Context, mediaUrl string, logTag string, tmpDir s
 	if err := res.convertIntelligent(ctx, analysis); err != nil {
 		return nil, fmt.Errorf("error converting video: %w", err)
 	}
+	// Conversion can change the dimensions; send metadata for the final file.
+	if probe, err := res.runFFProbe(ctx); err == nil {
+		res.updateVideoMetadata(probe)
+	} else {
+		log.Printf("[%s]: warning - could not refresh converted video metadata: %s", res.logTag, err)
+	}
 
 	return res, nil
 }
