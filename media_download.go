@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultMaxMediaFileSize = "350M"
+	defaultMaxMediaFileSize = "400M"
 	defaultYTDLPTimeout     = 15 * time.Minute
 	defaultFFProbeTimeout   = 30 * time.Second
 	defaultFFmpegTimeout    = 5 * time.Minute

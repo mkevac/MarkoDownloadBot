@@ -85,7 +85,7 @@ Oversized videos get one retry at a lower resolution (typically 720p to 480p), w
 Runtime limits can be adjusted with environment variables:
 
 ```
-MAX_MEDIA_FILESIZE=350M
+MAX_MEDIA_FILESIZE=400M
 YT_DLP_TIMEOUT_SECONDS=900
 FFMPEG_TIMEOUT_SECONDS=300
 ```
