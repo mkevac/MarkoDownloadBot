@@ -25,6 +25,10 @@ RUN apk add --no-cache yt-dlp gallery-dl py3-pip ffmpeg \
 WORKDIR /app
 ENV HOME=/app
 
+# Browser headers for both metadata extraction and media downloads.
+COPY downloader-config/yt-dlp.conf /etc/yt-dlp.conf
+COPY downloader-config/gallery-dl.conf /etc/gallery-dl.conf
+
 # Copy the binary from the builder stage
 COPY --from=builder /app/markodownloadbot /app/markodownloadbot
 

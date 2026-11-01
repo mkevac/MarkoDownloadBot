@@ -76,6 +76,18 @@ To use a custom cookies file with yt-dlp:
 
 If no custom cookies file is specified, an empty cookies file will be used by default.
 
+## Downloader User-Agent
+
+Docker and Docker Compose load the files in `downloader-config/` to give yt-dlp
+and gallery-dl the same Chrome User-Agent. The settings cover metadata requests,
+HTTP media downloads, and gallery-dl's embedded yt-dlp downloader. Compose mounts
+these files read-only, and the Docker image includes them for standalone use.
+This sets the HTTP header; it does not enable TLS browser impersonation.
+
+For local runs outside Docker, install these files in the downloaders' standard
+configuration locations or pass them with yt-dlp's `--config-locations` and
+gallery-dl's `--config` options.
+
 ## Media Limits and Testing
 
 The bot prefers H.264/AAC MP4 formats and only falls back to ffmpeg conversion when ffprobe shows the downloaded media is not mobile-compatible.

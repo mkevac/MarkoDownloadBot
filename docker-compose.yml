@@ -19,3 +19,5 @@ services:
     volumes:
       - ./data:/app/data
       - ${COOKIES_FILE:-./cookies.txt}:/app/cookies.txt
+      - ./downloader-config/yt-dlp.conf:/etc/yt-dlp.conf:ro
+      - ./downloader-config/gallery-dl.conf:/etc/gallery-dl.conf:ro
