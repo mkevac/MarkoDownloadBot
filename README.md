@@ -63,6 +63,12 @@ The bot automatically tracks all users who interact with it, storing their:
 
 When users block the bot, they are automatically marked as inactive and won't receive future broadcasts. If they return and interact with the bot again, they are automatically reactivated.
 
+Usage statistics track senders by their Telegram user ID, including requests in
+groups and guest mode. Renaming an account or removing its username does not
+split its new statistics. Stats show the latest `@username`, or the display name
+and user ID when no username is set. Sender profiles are stored separately from
+broadcast chat destinations.
+
 ## Custom Cookies File
 
 To use a custom cookies file with yt-dlp:

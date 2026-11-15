@@ -2,6 +2,7 @@ package stats
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -16,9 +17,10 @@ var (
 	dirBase string
 )
 
-// Init initializes the stats package with the given base directory
+// Init opens and migrates the stats database in the given base directory.
 func Init(dir string) {
 	dirBase = dir
+	getDB()
 }
 
 func initDB() {
@@ -34,19 +36,43 @@ func initDB() {
 		log.Fatalf("Error opening database: %v", err)
 	}
 
-	_, err = db.Exec(`
+	if err := initializeSchema(db); err != nil {
+		log.Fatalf("Error initializing stats database: %v", err)
+	}
+}
+
+// initializeSchema adds nullable IDs without attributing legacy events by name.
+func initializeSchema(database *sql.DB) error {
+	tx, err := database.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
 		CREATE TABLE IF NOT EXISTS events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER,
 			username TEXT,
 			event_type TEXT,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
-		log.Fatalf("Error creating events table: %v", err)
+		return err
 	}
 
-	_, err = db.Exec(`
+	var hasUserID int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'user_id'").Scan(&hasUserID); err != nil {
+		return err
+	}
+	if hasUserID == 0 {
+		if _, err := tx.Exec("ALTER TABLE events ADD COLUMN user_id INTEGER"); err != nil {
+			return err
+		}
+	}
+
+	_, err = tx.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			chat_id INTEGER PRIMARY KEY,
 			username TEXT,
@@ -58,8 +84,20 @@ func initDB() {
 		)
 	`)
 	if err != nil {
-		log.Fatalf("Error creating users table: %v", err)
+		return err
 	}
+	_, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS user_profiles (
+			user_id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT
+		)
+	`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func getDB() *sql.DB {
@@ -67,13 +105,24 @@ func getDB() *sql.DB {
 	return db
 }
 
-func addEvent(username, eventType string) error {
-	_, err := getDB().Exec("INSERT INTO events (username, event_type) VALUES (?, ?)", username, eventType)
+func addEvent(userID int64, username, eventType string) error {
+	if userID <= 0 {
+		return errors.New("stats: a positive sender user ID is required")
+	}
+	_, err := getDB().Exec("INSERT INTO events (user_id, username, event_type) VALUES (?, ?, ?)", userID, username, eventType)
 	return err
 }
 
-func registerUser(chatID int64, username, firstName, lastName string) error {
-	_, err := getDB().Exec(`
+func registerUser(chatID, userID int64, username, firstName, lastName string) error {
+	if userID <= 0 {
+		return errors.New("stats: a positive sender user ID is required")
+	}
+	tx, err := getDB().Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
 		INSERT INTO users (chat_id, username, first_name, last_name, is_active, last_interaction, created_at)
 		VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(chat_id) DO UPDATE SET
@@ -83,7 +132,21 @@ func registerUser(chatID int64, username, firstName, lastName string) error {
 			is_active = 1,
 			last_interaction = CURRENT_TIMESTAMP
 	`, chatID, username, firstName, lastName)
-	return err
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
+		INSERT INTO user_profiles (user_id, username, first_name, last_name)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			username = excluded.username,
+			first_name = excluded.first_name,
+			last_name = excluded.last_name
+	`, userID, username, firstName, lastName)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func getAllUserChatIDs() ([]int64, error) {
@@ -116,12 +179,7 @@ func markUserInactive(chatID int64) error {
 }
 
 func getStats(period string) (*Stats, error) {
-	stats := &Stats{
-		VideoRequests:        make(map[string]int),
-		AudioRequests:        make(map[string]int),
-		DownloadErrors:       make(map[string]int),
-		UnrecognizedCommands: make(map[string]int),
-	}
+	stats := &Stats{}
 
 	var timeConstraint string
 	switch period {
@@ -136,14 +194,17 @@ func getStats(period string) (*Stats, error) {
 	}
 
 	query := fmt.Sprintf(`
-		SELECT username, 
+		SELECT e.user_id,
+			   CASE WHEN e.user_id IS NULL THEN COALESCE(e.username, '') ELSE COALESCE(u.username, '') END,
+			   COALESCE(u.first_name, ''), COALESCE(u.last_name, ''),
 			   SUM(CASE WHEN event_type = 'video_request' THEN 1 ELSE 0 END) as video_requests,
 			   SUM(CASE WHEN event_type = 'audio_request' THEN 1 ELSE 0 END) as audio_requests,
 			   SUM(CASE WHEN event_type = 'download_error' THEN 1 ELSE 0 END) as download_errors,
 			   SUM(CASE WHEN event_type = 'unrecognized_command' THEN 1 ELSE 0 END) as unrecognized_commands
-		FROM events
+		FROM events e
+		LEFT JOIN user_profiles u ON u.user_id = e.user_id
 		WHERE 1=1 %s
-		GROUP BY username
+		GROUP BY e.user_id, CASE WHEN e.user_id IS NULL THEN COALESCE(e.username, '') END
 	`, timeConstraint)
 
 	rows, err := getDB().Query(query)
@@ -153,18 +214,18 @@ func getStats(period string) (*Stats, error) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var username string
-		var videoRequests, audioRequests, downloadErrors, unrecognizedCommands int
-		err := rows.Scan(&username, &videoRequests, &audioRequests, &downloadErrors, &unrecognizedCommands)
+		var user UserStats
+		var userID sql.NullInt64
+		err := rows.Scan(&userID, &user.Username, &user.FirstName, &user.LastName,
+			&user.VideoRequests, &user.AudioRequests, &user.DownloadErrors, &user.UnrecognizedCommands)
 		if err != nil {
 			return nil, err
 		}
 
-		stats.VideoRequests[username] = videoRequests
-		stats.AudioRequests[username] = audioRequests
-		stats.DownloadErrors[username] = downloadErrors
-		stats.UnrecognizedCommands[username] = unrecognizedCommands
+		user.UserID = userID.Int64
+		user.Legacy = !userID.Valid
+		stats.Users = append(stats.Users, user)
 	}
 
-	return stats, nil
+	return stats, rows.Err()
 }

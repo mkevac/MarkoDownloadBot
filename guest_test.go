@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/go-telegram/bot/models"
-	"github.com/mkevac/markodownloadbot/stats"
 )
 
 func TestExtractGuestURL(t *testing.T) {
@@ -352,8 +351,6 @@ var _ GuestResponder = (*fakeGuestResponder)(nil)
 // the queue isn't actually exercised on the silent path.
 func withGuestTestEnv(t *testing.T) *fakeGuestResponder {
 	t.Helper()
-	stats.Init(t.TempDir())
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 

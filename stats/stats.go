@@ -3,6 +3,7 @@ package stats
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -10,35 +11,81 @@ import (
 )
 
 type Stats struct {
-	VideoRequests        map[string]int `json:"video_requests"`
-	AudioRequests        map[string]int `json:"audio_requests"`
-	DownloadErrors       map[string]int `json:"download_errors"`
-	UnrecognizedCommands map[string]int `json:"unrecognized_commands"`
+	Users []UserStats `json:"users"`
 }
 
-func AddVideoRequest(username string) {
-	err := addEvent(username, "video_request")
+type Counts struct {
+	VideoRequests        int `json:"video_requests"`
+	AudioRequests        int `json:"audio_requests"`
+	DownloadErrors       int `json:"download_errors"`
+	UnrecognizedCommands int `json:"unrecognized_commands"`
+}
+
+func (c Counts) Total() int {
+	return c.VideoRequests + c.AudioRequests + c.DownloadErrors + c.UnrecognizedCommands
+}
+
+type UserStats struct {
+	UserID    int64  `json:"user_id"`
+	Username  string `json:"username"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Legacy    bool   `json:"legacy"`
+	Counts
+}
+
+// DisplayName is a label only; aggregation always uses UserID for new events.
+func (u UserStats) DisplayName() string {
+	if u.Legacy {
+		if u.Username == "" {
+			return "Legacy users without username"
+		}
+		return "Legacy @" + u.Username
+	}
+	if u.Username != "" {
+		return "@" + u.Username
+	}
+	name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+	if name != "" {
+		return fmt.Sprintf("%s (ID %d)", name, u.UserID)
+	}
+	return fmt.Sprintf("User ID %d", u.UserID)
+}
+
+func (s *Stats) Totals() Counts {
+	var totals Counts
+	for _, u := range s.Users {
+		totals.VideoRequests += u.VideoRequests
+		totals.AudioRequests += u.AudioRequests
+		totals.DownloadErrors += u.DownloadErrors
+		totals.UnrecognizedCommands += u.UnrecognizedCommands
+	}
+	return totals
+}
+
+func AddVideoRequest(userID int64, username string) {
+	err := addEvent(userID, username, "video_request")
 	if err != nil {
 		log.Printf("Error adding video request event to database: %v", err)
 	}
 }
 
-func AddAudioRequest(username string) {
-	err := addEvent(username, "audio_request")
+func AddAudioRequest(userID int64, username string) {
+	err := addEvent(userID, username, "audio_request")
 	if err != nil {
 		log.Printf("Error adding audio request event to database: %v", err)
 	}
 }
 
-func AddDownloadError(username string) {
-	err := addEvent(username, "download_error")
+func AddDownloadError(userID int64, username string) {
+	err := addEvent(userID, username, "download_error")
 	if err != nil {
 		log.Printf("Error adding download error event to database: %v", err)
 	}
 }
 
-func AddUnrecognizedCommand(username string) {
-	err := addEvent(username, "unrecognized_command")
+func AddUnrecognizedCommand(userID int64, username string) {
+	err := addEvent(userID, username, "unrecognized_command")
 	if err != nil {
 		log.Printf("Error adding unrecognized command event to database: %v", err)
 	}
@@ -48,19 +95,15 @@ func GetStats(period string) *Stats {
 	stats, err := getStats(period)
 	if err != nil {
 		log.Printf("Error getting stats from database: %v", err)
-		return &Stats{
-			VideoRequests:        make(map[string]int),
-			AudioRequests:        make(map[string]int),
-			DownloadErrors:       make(map[string]int),
-			UnrecognizedCommands: make(map[string]int),
-		}
+		return &Stats{}
 	}
 	return stats
 }
 
-// RegisterUser registers or updates a user in the database
-func RegisterUser(chatID int64, username, firstName, lastName string) {
-	err := registerUser(chatID, username, firstName, lastName)
+// RegisterUser updates the sender's profile separately from the broadcast chat.
+// In a group, chatID is the group's ID and userID is the sender's personal ID.
+func RegisterUser(chatID, userID int64, username, firstName, lastName string) {
+	err := registerUser(chatID, userID, username, firstName, lastName)
 	if err != nil {
 		log.Printf("Error registering user: %v", err)
 	}
@@ -78,10 +121,10 @@ func GetUserCount() (int, error) {
 
 // BroadcastResult contains the results of a broadcast operation
 type BroadcastResult struct {
-	Sent            int
-	Failed          int
-	BlockedByUser   int
-	Errors          []string
+	Sent          int
+	Failed        int
+	BlockedByUser int
+	Errors        []string
 }
 
 // SendMessageFunc is a function type for sending messages

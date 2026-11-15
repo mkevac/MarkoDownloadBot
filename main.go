@@ -370,7 +370,7 @@ func cleanupAndVerifyInput(input string) (string, error) {
 func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received stats command", update.Message.From.Username)
 
-	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.Chat.ID != adminChatID {
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -390,16 +390,14 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	summaryMsg.WriteString("*Summary Stats*\n\n")
 
 	for _, period := range periods {
-		stats := stats.GetStats(period)
-		totalVideoRequests := sum(stats.VideoRequests)
-		totalAudioRequests := sum(stats.AudioRequests)
+		totals := stats.GetStats(period).Totals()
 
 		caser := cases.Title(language.English)
 		summaryMsg.WriteString(fmt.Sprintf("*%s:* V:`%d` A:`%d` E:`%d`\n",
 			caser.String(period),
-			totalVideoRequests,
-			totalAudioRequests,
-			sum(stats.DownloadErrors)))
+			totals.VideoRequests,
+			totals.AudioRequests,
+			totals.DownloadErrors))
 	}
 
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -417,41 +415,27 @@ func statsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		var detailMsg strings.Builder
 		detailMsg.WriteString(fmt.Sprintf("*Detailed Stats \\- %s*\n\n", cases.Title(language.English).String(period)))
 
-		// Get top 10 users by total activity
-		type userStats struct {
-			username string
-			total    int
-		}
-
-		users := make([]userStats, 0)
-		for username, videoCount := range stats.VideoRequests {
-			total := videoCount +
-				stats.AudioRequests[username] +
-				stats.DownloadErrors[username] +
-				stats.UnrecognizedCommands[username]
-			users = append(users, userStats{username, total})
-		}
-
-		// Sort users by total activity
+		users := stats.Users
 		sort.Slice(users, func(i, j int) bool {
-			return users[i].total > users[j].total
+			if users[i].Total() != users[j].Total() {
+				return users[i].Total() > users[j].Total()
+			}
+			if users[i].DisplayName() != users[j].DisplayName() {
+				return users[i].DisplayName() < users[j].DisplayName()
+			}
+			return users[i].UserID < users[j].UserID
 		})
-
-		// Show top 10 users
-		maxUsers := 10
-		if len(users) < maxUsers {
-			maxUsers = len(users)
+		if len(users) > 10 {
+			users = users[:10]
 		}
 
 		detailMsg.WriteString("Top Users:\n")
-		for i := 0; i < maxUsers; i++ {
-			username := users[i].username
-			escapedUsername := bot.EscapeMarkdown(username)
-			detailMsg.WriteString(fmt.Sprintf("@%s: V:`%d` A:`%d` E:`%d`\n",
-				escapedUsername,
-				stats.VideoRequests[username],
-				stats.AudioRequests[username],
-				stats.DownloadErrors[username]))
+		for _, user := range users {
+			detailMsg.WriteString(fmt.Sprintf("%s: V:`%d` A:`%d` E:`%d`\n",
+				bot.EscapeMarkdown(user.DisplayName()),
+				user.VideoRequests,
+				user.AudioRequests,
+				user.DownloadErrors))
 		}
 
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -484,7 +468,7 @@ func audioHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, input string, audioOnly bool) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
-	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	input, err := cleanupAndVerifyInput(input)
 	if err != nil {
@@ -495,14 +479,14 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 			log.Printf("[%s]: error sending invalid URL message: %v", update.Message.From.Username, err)
 		}
 		sendMessageToAdmin(ctx, b, fmt.Sprintf("Unrecognized command from @%s: %s", update.Message.From.Username, update.Message.Text))
-		stats.AddUnrecognizedCommand(update.Message.From.Username)
+		stats.AddUnrecognizedCommand(update.Message.From.ID, update.Message.From.Username)
 		return
 	}
 
 	if audioOnly {
-		stats.AddAudioRequest(update.Message.From.Username)
+		stats.AddAudioRequest(update.Message.From.ID, update.Message.From.Username)
 	} else {
-		stats.AddVideoRequest(update.Message.From.Username)
+		stats.AddVideoRequest(update.Message.From.ID, update.Message.From.Username)
 	}
 
 	mediaType := "video"
@@ -514,6 +498,7 @@ func handleDownload(ctx context.Context, b *bot.Bot, update *models.Update, inpu
 	entry := &DownloadEntry{
 		ID:        uuid.New().String(),
 		ChatID:    update.Message.Chat.ID,
+		UserID:    update.Message.From.ID,
 		URL:       input,
 		Username:  update.Message.From.Username,
 		AudioOnly: audioOnly,
@@ -602,7 +587,7 @@ func (p *downloadProcessor) process(entryCtx context.Context, e *DownloadEntry) 
 			return
 		}
 		log.Printf("[%s]: error downloading %s: %s", e.LogTag(), mediaType, err)
-		stats.AddDownloadError(e.Username)
+		stats.AddDownloadError(e.UserID, e.Username)
 		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading %s from %s: %s",
 			e.Username, mediaType, e.URL, err.Error())
 		_ = p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), errorMsg, "")
@@ -678,7 +663,7 @@ func (p *downloadProcessor) processGuest(entryCtx context.Context, e *DownloadEn
 			return
 		}
 		log.Printf("[%s]: guest download failed: %v", e.LogTag(), err)
-		stats.AddDownloadError(e.Username)
+		stats.AddDownloadError(e.UserID, e.Username)
 		errMsg := fmt.Sprintf("Sorry — couldn't download %s. %s", mediaType, err.Error())
 		if respErr := p.guestResponder.RespondError(p.botCtx, e.GuestQueryID, e.ResultID, errMsg); respErr != nil {
 			log.Printf("[%s]: failed to send guest error reply: %v", e.LogTag(), respErr)
@@ -722,7 +707,7 @@ func handleGuestMessage(ctx context.Context, gm *guestMessage) {
 	log.Printf("[guest %s]: received guest message: %q", username, gm.Text)
 
 	// Track the user under their personal chat (user_id) so future DMs link up.
-	stats.RegisterUser(gm.From.ID, gm.From.Username, gm.From.FirstName, gm.From.LastName)
+	stats.RegisterUser(gm.From.ID, gm.From.ID, gm.From.Username, gm.From.FirstName, gm.From.LastName)
 
 	text := strings.TrimSpace(gm.Text)
 	audioOnly := false
@@ -744,7 +729,7 @@ func handleGuestMessage(ctx context.Context, gm *guestMessage) {
 	cleanURL, err := cleanupAndVerifyInput(rawURL)
 	if err != nil {
 		log.Printf("[guest %s]: invalid URL %q: %v", username, rawURL, err)
-		stats.AddUnrecognizedCommand(username)
+		stats.AddUnrecognizedCommand(gm.From.ID, username)
 		if guestResponder := getGuestResponder(); guestResponder != nil {
 			if err := guestResponder.RespondError(ctx, gm.GuestQueryID, uuid.New().String(),
 				"That doesn't look like a valid URL."); err != nil {
@@ -755,14 +740,15 @@ func handleGuestMessage(ctx context.Context, gm *guestMessage) {
 	}
 
 	if audioOnly {
-		stats.AddAudioRequest(username)
+		stats.AddAudioRequest(gm.From.ID, username)
 	} else {
-		stats.AddVideoRequest(username)
+		stats.AddVideoRequest(gm.From.ID, username)
 	}
 
 	entry := &DownloadEntry{
 		ID:           uuid.New().String(),
 		ChatID:       gm.From.ID,
+		UserID:       gm.From.ID,
 		URL:          cleanURL,
 		Username:     username,
 		AudioOnly:    audioOnly,
@@ -792,7 +778,7 @@ func (p *downloadProcessor) processCarousel(entryCtx context.Context, e *Downloa
 			return
 		}
 		log.Printf("[%s]: error downloading carousel: %s", e.LogTag(), err)
-		stats.AddDownloadError(e.Username)
+		stats.AddDownloadError(e.UserID, e.Username)
 		errorMsg := fmt.Sprintf("I'm sorry, @%s. I'm afraid I can't do that. Error downloading carousel from %s: %s",
 			e.Username, e.URL, err.Error())
 		_ = p.messenger.Edit(p.botCtx, e.ChatID, e.StatusMessageID(), errorMsg, "")
@@ -849,7 +835,7 @@ func (p *downloadProcessor) processCarousel(entryCtx context.Context, e *Downloa
 func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received broadcast command", update.Message.From.Username)
 
-	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.Chat.ID != adminChatID {
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -918,7 +904,7 @@ func broadcastHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 func usersHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received users command", update.Message.From.Username)
 
-	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	if update.Message.Chat.ID != adminChatID {
 		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -953,7 +939,7 @@ func usersHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	log.Printf("[%s]: received message: '%s'", update.Message.From.Username, update.Message.Text)
 
-	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
+	stats.RegisterUser(update.Message.Chat.ID, update.Message.From.ID, update.Message.From.Username, update.Message.From.FirstName, update.Message.From.LastName)
 
 	helpMessage := `<b>Welcome to the Marko Download Bot!</b>
 
@@ -988,13 +974,4 @@ Note: Please ensure you have the rights to download and use the media you reques
 	}); err != nil {
 		log.Printf("[%s]: error sending help message: %v", update.Message.From.Username, err)
 	}
-}
-
-// Helper function to sum map values
-func sum(m map[string]int) int {
-	total := 0
-	for _, v := range m {
-		total += v
-	}
-	return total
 }

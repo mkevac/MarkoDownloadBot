@@ -19,6 +19,7 @@ type Messenger interface {
 type DownloadEntry struct {
 	ID        string
 	ChatID    int64
+	UserID    int64 // Sender identity, independent of the destination ChatID.
 	URL       string
 	Username  string
 	AudioOnly bool
@@ -209,4 +210,3 @@ func indexOfEntry(entries []*DownloadEntry, id string) int {
 	}
 	return -1
 }
-
